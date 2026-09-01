@@ -1,7 +1,6 @@
 import {
   useCallback,
   useEffect,
-  useMemo,
   useState,
   type FormEvent,
   type ReactNode,
@@ -47,6 +46,7 @@ import {
 import {
   api,
   SignalOpsApiError,
+  type ApiAuthContext,
   type ApiCategory,
   type ApiChannelSetting,
   type ApiPermission,
@@ -136,9 +136,14 @@ const pageTitles: Record<
     subtitle: "Control who can create, approve and release alerts.",
   },
   settings: {
-    eyebrow: "WORKSPACE",
+    eyebrow: "ORGANISATION",
     title: "Channels & settings",
     subtitle: "Configure delivery providers and organisation-wide defaults.",
+  },
+  profile: {
+    eyebrow: "ACCOUNT",
+    title: "My profile",
+    subtitle: "Review your identity, organisation access and account security.",
   },
 };
 
@@ -153,6 +158,33 @@ const channelLabel: Record<Channel, string> = {
   android: "Android push",
 };
 
+type CurrentUser = {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  status: "active";
+  isPlatformAdmin: boolean;
+};
+
+const currentUserFromSession = (session: ApiAuthContext): CurrentUser => ({
+  id: session.id,
+  name: session.full_name,
+  email: session.email,
+  role: session.role,
+  status: session.status,
+  isPlatformAdmin: session.is_platform_admin,
+});
+
+const roleLabel = (user: CurrentUser) => {
+  if (user.isPlatformAdmin) return "Platform administrator";
+  if (user.role === "owner") return "Organisation owner";
+  if (user.role === "admin") return "Organisation administrator";
+  return user.role
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+};
+
 function App() {
   const accountFlow = window.location.pathname.endsWith("/activate")
     ? "activate"
@@ -163,13 +195,18 @@ function App() {
   const [authenticated, setAuthenticated] = useState(false);
   const [bootstrapping, setBootstrapping] = useState(true);
   const [loadingData, setLoadingData] = useState(false);
-  const [currentUser, setCurrentUser] = useState({
+  const [currentUser, setCurrentUser] = useState<CurrentUser>({
+    id: "",
     name: "Organisation administrator",
     email: "",
+    role: "admin",
+    status: "active",
+    isPlatformAdmin: false,
   });
   const [page, setPage] = useState<NavPage>(() => {
     const requested = window.location.hash.replace("#", "") as NavPage;
-    return navItems.some((item) => item.id === requested)
+    return navItems.some((item) => item.id === requested) ||
+      requested === "profile"
       ? requested
       : "overview";
   });
@@ -181,11 +218,10 @@ function App() {
     slug: "",
     name: "SignalOps",
     shortName: "SO",
-    plan: "Organisation workspace",
+    plan: "Customer organisation",
     facilities: 0,
     people: 0,
   });
-  const [tenantMenu, setTenantMenu] = useState(false);
   const [headerPanel, setHeaderPanel] = useState<
     "search" | "notifications" | null
   >(null);
@@ -274,14 +310,6 @@ function App() {
       );
       setRoles(roleRows);
       setChannelSettings(settingsData.channels);
-      const administrator = users.find(
-        (user) => user.account_type === "admin" && user.status === "active",
-      );
-      if (administrator)
-        setCurrentUser({
-          name: administrator.full_name,
-          email: administrator.email,
-        });
     } finally {
       setLoadingData(false);
     }
@@ -295,9 +323,10 @@ function App() {
     let active = true;
     api
       .restore()
-      .then(async (restored) => {
+      .then(async (session) => {
         if (!active) return;
-        if (restored) {
+        if (session) {
+          setCurrentUser(currentUserFromSession(session));
           setAuthenticated(true);
           try {
             await loadWorkspace();
@@ -324,7 +353,10 @@ function App() {
   useEffect(() => {
     const syncPageFromUrl = () => {
       const requested = window.location.hash.replace("#", "") as NavPage;
-      if (navItems.some((item) => item.id === requested)) {
+      if (
+        navItems.some((item) => item.id === requested) ||
+        requested === "profile"
+      ) {
         setPage(requested);
         window.scrollTo({ top: 0, left: 0, behavior: "auto" });
       }
@@ -359,7 +391,6 @@ function App() {
     const openSearch = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
-        setTenantMenu(false);
         setHeaderPanel("search");
       }
     };
@@ -368,7 +399,6 @@ function App() {
   }, []);
 
   const tenantId = tenant.id;
-  const tenants = useMemo(() => (tenant.id ? [tenant] : []), [tenant]);
   const tenantBroadcasts = broadcasts.filter(
     (item) => item.tenantId === tenantId,
   );
@@ -437,7 +467,6 @@ function App() {
       window.location.hash = nextPage;
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
     setMobileNav(false);
-    setTenantMenu(false);
     setHeaderPanel(null);
   };
 
@@ -766,7 +795,14 @@ function App() {
 
   const login = async (email: string, password: string, remember: boolean) => {
     const context = await api.login(email, password, remember);
-    setCurrentUser({ name: context.user.fullName, email: context.user.email });
+    setCurrentUser({
+      id: context.user.id,
+      name: context.user.fullName,
+      email: context.user.email,
+      role: context.user.roles[0]?.name || "Organisation administrator",
+      status: "active",
+      isPlatformAdmin: false,
+    });
     await loadWorkspace();
     setAuthenticated(true);
   };
@@ -855,15 +891,6 @@ function App() {
             <LifeBuoy size={18} strokeWidth={1.8} />
             <span>Help & support</span>
           </button>
-          <div className="user-card">
-            <div className="avatar">
-              {tenant.shortName}
-            </div>
-            <div>
-              <strong>{tenant.name}</strong>
-              <span>{tenant.plan}</span>
-            </div>
-          </div>
         </div>
       </aside>
 
@@ -882,22 +909,20 @@ function App() {
               setHeaderPanel((value) =>
                 value === "search" ? null : "search",
               );
-              setTenantMenu(false);
             }}
           >
             <Search size={17} />
             <span>Search alerts, people or facilities...</span>
             <kbd>Ctrl K</kbd>
           </button>
-          <div className="tenant-wrap">
+          <div className="profile-entry">
             <button
-              className="tenant-switcher"
-              onClick={() => {
-                setTenantMenu((value) => !value);
-                setHeaderPanel(null);
-              }}
+              className={`profile-trigger ${page === "profile" ? "active" : ""}`}
+              aria-label="Open my profile"
+              aria-current={page === "profile" ? "page" : undefined}
+              onClick={() => navigate("profile")}
             >
-              <span className="tenant-logo">
+              <span className="profile-avatar">
                 {currentUser.name
                   .split(/\s+/)
                   .map((part) => part[0])
@@ -905,35 +930,11 @@ function App() {
                   .slice(0, 2)
                   .toUpperCase()}
               </span>
-              <span>
+              <span className="profile-copy">
                 <b>{currentUser.name}</b>
-                <small>Organisation admin</small>
+                <small>{roleLabel(currentUser)}</small>
               </span>
             </button>
-            {tenantMenu && (
-              <div className="tenant-dropdown">
-                <p>SWITCH WORKSPACE</p>
-                {tenants.map((item) => (
-                  <button
-                    key={item.id}
-                    onClick={() => {
-                      setTenantMenu(false);
-                      setDetailId(null);
-                    }}
-                  >
-                    <span className="tenant-logo small">{item.shortName}</span>
-                    <span>
-                      <b>{item.name}</b>
-                      <small>
-                        {item.people} people · {item.facilities}{" "}
-                        {item.facilities === 1 ? "facility" : "facilities"}
-                      </small>
-                    </span>
-                    {item.id === tenantId && <Check size={17} />}
-                  </button>
-                ))}
-              </div>
-            )}
           </div>
           <button
             className="top-signout"
@@ -955,7 +956,6 @@ function App() {
                 setHeaderPanel((value) =>
                   value === "search" ? null : "search",
                 );
-                setTenantMenu(false);
               }}
             >
               <Search size={19} />
@@ -968,7 +968,6 @@ function App() {
                 setHeaderPanel((value) =>
                   value === "notifications" ? null : "notifications",
                 );
-                setTenantMenu(false);
               }}
             >
               <BellRing size={19} />
@@ -980,7 +979,7 @@ function App() {
             </button>
             {headerPanel === "search" && (
               <div className="header-popover search-popover">
-                <span className="popover-label">SEARCH WORKSPACE</span>
+                <span className="popover-label">SEARCH SIGNALOPS</span>
                 <div className="popover-search">
                   <Search size={17} />
                   <input
@@ -1139,7 +1138,8 @@ function App() {
               page !== "settings" &&
               page !== "people" &&
               page !== "roles" &&
-              page !== "responses" && (
+              page !== "responses" &&
+              page !== "profile" && (
                 <PageAction
                   page={page}
                   onAction={() => {
@@ -1276,6 +1276,15 @@ function App() {
             />
           )}
           {page === "settings" && <SettingsPage onNotify={setToast} />}
+          {page === "profile" && (
+            <ProfilePage
+              user={currentUser}
+              organisation={tenant.name}
+              onChangePassword={() => {
+                window.location.href = `/forgot-password?email=${encodeURIComponent(currentUser.email)}`;
+              }}
+            />
+          )}
         </main>
       </div>
 
@@ -1329,12 +1338,11 @@ function App() {
           }}
         />
       )}
-      {(tenantMenu || headerPanel) && (
+      {headerPanel && (
         <button
           className="popover-dismiss"
           aria-label="Close open menu"
           onClick={() => {
-            setTenantMenu(false);
             setHeaderPanel(null);
           }}
         />
@@ -1388,7 +1396,7 @@ function AdminLogin({
       setError(
         problem instanceof SignalOpsApiError
           ? problem.message
-          : "An unexpected error occurred while loading the workspace. Please try again.",
+          : "An unexpected error occurred while loading the organisation. Please try again.",
       );
     } finally {
       setLoading(false);
@@ -1399,7 +1407,7 @@ function AdminLogin({
       <section className="login-card">
         <div className="login-form-section">
           <h1>Welcome back</h1>
-          <p>Sign in to your administrator workspace</p>
+          <p>Sign in to your organisation administrator account</p>
           <form onSubmit={submit}>
             <label htmlFor="admin-email">Email</label>
             <input
@@ -1583,7 +1591,7 @@ function Overview({
           icon={Users}
           label="Employees"
           value={recipients.toLocaleString("en-IN")}
-          helper="Registered in this workspace"
+          helper="Registered in this organisation"
           tone="blue"
         />
         <StatCard
@@ -3201,7 +3209,7 @@ function RolesPage({
       <div className="governance-grid">
         <div className="panel roles-panel">
           <PanelHeader
-            title="Workspace roles"
+            title="Organisation roles"
             subtitle="Permissions follow least-privilege access"
             action={
               <div className="page-actions">
@@ -3295,7 +3303,7 @@ function RolesPage({
         <div className="panel approval-panel">
           <PanelHeader
             title="Approval workflow"
-            subtitle="Workspace release policy"
+            subtitle="Organisation release policy"
           />
           <div className="policy-status">
             <CheckCircle2 size={19} />
@@ -3782,7 +3790,7 @@ function RoleEditorModal({
         }}
       >
         <div className="modal-header">
-          <h2>{role.id ? "Edit workspace role" : "Create workspace role"}</h2>
+          <h2>{role.id ? "Edit organisation role" : "Create organisation role"}</h2>
           <button type="button" onClick={onClose}>
             <X size={21} />
           </button>
@@ -3952,6 +3960,108 @@ function InvitePortalUserModal({
   );
 }
 
+function ProfilePage({
+  user,
+  organisation,
+  onChangePassword,
+}: {
+  user: CurrentUser;
+  organisation: string;
+  onChangePassword: () => void;
+}) {
+  const initials = user.name
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase();
+
+  return (
+    <div className="profile-grid">
+      <section className="panel profile-card">
+        <div className="profile-hero">
+          <span className="profile-hero-avatar">{initials}</span>
+          <div>
+            <span className="profile-status">
+              <i /> Active account
+            </span>
+            <h2>{user.name}</h2>
+            <p>{roleLabel(user)}</p>
+          </div>
+        </div>
+        <div className="profile-details">
+          <div className="profile-detail-row">
+            <span>
+              <CircleUserRound size={18} />
+            </span>
+            <div>
+              <small>Full name</small>
+              <b>{user.name}</b>
+            </div>
+          </div>
+          <div className="profile-detail-row">
+            <span>
+              <Mail size={18} />
+            </span>
+            <div>
+              <small>Email address</small>
+              <b>{user.email}</b>
+            </div>
+          </div>
+          <div className="profile-detail-row">
+            <span>
+              <Building2 size={18} />
+            </span>
+            <div>
+              <small>Organisation</small>
+              <b>{organisation}</b>
+            </div>
+          </div>
+          <div className="profile-detail-row">
+            <span>
+              <ShieldCheck size={18} />
+            </span>
+            <div>
+              <small>Access level</small>
+              <b>{roleLabel(user)}</b>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="panel profile-security-card">
+        <PanelHeader
+          title="Account security"
+          subtitle="Password and account recovery"
+        />
+        <div className="profile-security-content">
+          <span className="profile-security-icon">
+            <LockKeyhole size={20} />
+          </span>
+          <div>
+            <h3>Password</h3>
+            <p>
+              Password changes require a six-digit verification code sent to
+              your registered email address.
+            </p>
+          </div>
+          <button className="primary-button" onClick={onChangePassword}>
+            Change password
+          </button>
+        </div>
+        <div className="profile-security-note">
+          <ShieldCheck size={17} />
+          <span>
+            Your email address identifies your account and cannot currently be
+            changed from the portal.
+          </span>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function SettingsPage({ onNotify }: { onNotify: (message: string) => void }) {
   const [preferences, setPreferences] = useState<ApiTenantSettings | null>(
     null,
@@ -3976,7 +4086,7 @@ function SettingsPage({ onNotify }: { onNotify: (message: string) => void }) {
   const updatePreference = async (value: Record<string, unknown>) => {
     try {
       setPreferences(await api.updateSettings(value));
-      onNotify("Workspace settings updated");
+      onNotify("Organisation settings updated");
     } catch (error) {
       onNotify(
         error instanceof SignalOpsApiError
@@ -4003,7 +4113,7 @@ function SettingsPage({ onNotify }: { onNotify: (message: string) => void }) {
         {!channels.length && (
           <EmptyState
             title="No delivery channels"
-            text="Channel settings will appear after the workspace loads."
+            text="Channel settings will appear after the organisation loads."
           />
         )}
       </div>

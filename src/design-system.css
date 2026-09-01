@@ -265,7 +265,7 @@
 .app-shell .top-actions { order: 2; margin-left: auto; }
 .app-shell .top-actions > .icon-button:first-child,
 .app-shell .top-actions > .primary-button { display: none; }
-.app-shell .tenant-wrap { order: 3; margin-left: 4px; padding-left: 12px; border-left: 1px solid var(--fx-line); }
+.app-shell .profile-entry { order: 3; margin-left: 4px; padding-left: 12px; border-left: 1px solid var(--fx-line); }
 .app-shell .top-signout {
   order: 4;
   width: 36px;
@@ -281,13 +281,35 @@
 }
 .app-shell .top-signout:hover { color: var(--fx-ink); background: var(--fx-soft); }
 .app-shell .search-popover { position: fixed; top: 58px; left: calc(var(--shell-sidebar) + 25px); right: auto; width: 370px; }
-.app-shell .tenant-switcher { min-height: 42px; padding: 4px 6px; gap: 9px; border-radius: 9px; }
-.app-shell .tenant-switcher:hover { background: var(--fx-soft); }
-.app-shell .tenant-logo { width: 34px; height: 34px; border-radius: 9px; font-size: 10px; }
-.app-shell .tenant-switcher b,
-.app-shell .tenant-dropdown b { color: var(--fx-ink); font-size: 11px; font-weight: 650; }
-.app-shell .tenant-switcher small,
-.app-shell .tenant-dropdown small { margin-top: 1px; color: var(--fx-muted); font-size: 8px; }
+.app-shell .profile-trigger {
+  min-height: 42px;
+  padding: 4px 6px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--fx-ink);
+  background: transparent;
+  border: 0;
+  border-radius: 9px;
+  cursor: pointer;
+}
+.app-shell .profile-trigger:hover,
+.app-shell .profile-trigger.active { background: var(--fx-soft); }
+.app-shell .profile-avatar {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  color: var(--fx-accent-dark);
+  background: var(--fx-accent-soft);
+  border-radius: 9px;
+  font-size: 10px;
+  font-weight: 700;
+}
+.app-shell .profile-copy { min-width: 0; display: flex; flex-direction: column; text-align: left; }
+.app-shell .profile-copy b { max-width: 150px; overflow: hidden; font-size: 11px; font-weight: 650; text-overflow: ellipsis; white-space: nowrap; }
+.app-shell .profile-copy small { max-width: 150px; margin-top: 1px; overflow: hidden; color: var(--fx-muted); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
 .app-shell .top-actions { gap: 7px; }
 .app-shell .icon-button,
 .app-shell .mobile-menu { width: 36px; height: 36px; color: #65736f; border-color: var(--fx-line); border-radius: 8px; }
@@ -309,7 +331,6 @@
 .app-shell .primary-button:hover { background: #129990; transform: none; }
 .app-shell .secondary-button { color: #596762; background: #fff; border: 1px solid var(--fx-line); }
 .app-shell .secondary-button:hover { color: var(--fx-ink); background: var(--fx-soft); border-color: #cdd8d4; }
-.app-shell .tenant-dropdown,
 .app-shell .header-popover { top: 48px; border: 1px solid var(--fx-line); border-radius: 11px; box-shadow: 0 16px 42px rgba(29, 46, 41, .14); }
 
 /* Page frame and common hierarchy */
@@ -536,6 +557,110 @@
 .app-shell .group-card em,
 .app-shell .group-card > button { font-size: 7px; }
 
+/* User profile */
+.app-shell .profile-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(320px, .7fr);
+  gap: 13px;
+  align-items: start;
+}
+.app-shell .profile-card,
+.app-shell .profile-security-card { overflow: hidden; }
+.app-shell .profile-hero {
+  min-height: 132px;
+  padding: 22px;
+  display: flex;
+  align-items: center;
+  gap: 17px;
+  background: linear-gradient(145deg, #fff 48%, #eef9f7);
+}
+.app-shell .profile-hero-avatar {
+  width: 58px;
+  height: 58px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  color: #fff;
+  background: linear-gradient(145deg, #14a69c, #08766f);
+  border-radius: 15px;
+  font-size: 17px;
+  font-weight: 700;
+  box-shadow: 0 10px 24px rgba(9, 106, 100, .16);
+}
+.app-shell .profile-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #08775c;
+  font-size: 7px;
+  font-weight: 700;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+.app-shell .profile-status i { width: 6px; height: 6px; background: #2eb48b; border-radius: 50%; }
+.app-shell .profile-hero h2 { margin: 6px 0 2px; color: var(--fx-ink); font-size: 17px; font-weight: 650; letter-spacing: -.025em; }
+.app-shell .profile-hero p { margin: 0; color: var(--fx-muted); font-size: 9px; }
+.app-shell .profile-details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border-top: 1px solid var(--fx-line-soft);
+}
+.app-shell .profile-detail-row {
+  min-height: 74px;
+  padding: 14px 18px;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  border-right: 1px solid var(--fx-line-soft);
+  border-bottom: 1px solid var(--fx-line-soft);
+}
+.app-shell .profile-detail-row:nth-child(2n) { border-right: 0; }
+.app-shell .profile-detail-row:nth-last-child(-n + 2) { border-bottom: 0; }
+.app-shell .profile-detail-row > span {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  color: var(--fx-accent-dark);
+  background: var(--fx-accent-soft);
+  border-radius: 9px;
+}
+.app-shell .profile-detail-row small { display: block; margin-bottom: 3px; color: var(--fx-faint); font-size: 7px; }
+.app-shell .profile-detail-row b { display: block; overflow: hidden; color: var(--fx-copy); font-size: 9px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.app-shell .profile-security-content {
+  padding: 20px 16px 16px;
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  gap: 11px;
+}
+.app-shell .profile-security-icon {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  color: var(--fx-accent-dark);
+  background: var(--fx-accent-soft);
+  border-radius: 10px;
+}
+.app-shell .profile-security-content h3 { margin: 1px 0 4px; color: var(--fx-ink); font-size: 10px; font-weight: 650; }
+.app-shell .profile-security-content p { margin: 0; color: var(--fx-muted); font-size: 8px; line-height: 1.55; }
+.app-shell .profile-security-content .primary-button { grid-column: 1 / -1; width: 100%; margin-top: 5px; }
+.app-shell .profile-security-note {
+  margin: 0 16px 16px;
+  padding: 11px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: #4f706a;
+  background: #f0f8f7;
+  border: 1px solid #d9eeeb;
+  border-radius: 9px;
+  font-size: 7px;
+  line-height: 1.5;
+}
+.app-shell .profile-security-note svg { flex: 0 0 auto; color: var(--fx-accent); }
+
 /* Employee response state */
 .app-shell .response-incident-bar { min-height: 58px; margin-bottom: 10px; padding: 10px 14px; }
 .app-shell .response-incident-bar small { font-size: 7px; }
@@ -611,7 +736,8 @@
   .app-shell .dashboard-grid,
   .app-shell .dashboard-grid.lower-grid,
   .app-shell .governance-grid,
-  .app-shell .settings-grid { grid-template-columns: 1fr; }
+  .app-shell .settings-grid,
+  .app-shell .profile-grid { grid-template-columns: 1fr; }
   .app-shell .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .app-shell .template-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .app-shell .facility-layout { grid-template-columns: 1fr; }
@@ -694,9 +820,9 @@
   }
   .app-shell .global-search > span,
   .app-shell .global-search kbd,
-  .app-shell .tenant-switcher > span:nth-child(2) { display: none; }
-  .app-shell .tenant-switcher { padding: 3px; }
-  .app-shell .tenant-wrap {
+  .app-shell .profile-copy { display: none; }
+  .app-shell .profile-trigger { padding: 3px; }
+  .app-shell .profile-entry {
     display: block;
     margin-left: 0;
     padding-left: 0;
@@ -712,6 +838,14 @@
   .app-shell .stat-grid { grid-template-columns: 1fr; }
   .app-shell .stat-card { min-height: 120px; flex-direction: column; align-items: flex-start; }
   .app-shell .stat-card small { display: block; }
+  .app-shell .profile-details { grid-template-columns: 1fr; }
+  .app-shell .profile-detail-row,
+  .app-shell .profile-detail-row:nth-child(2n),
+  .app-shell .profile-detail-row:nth-last-child(-n + 2) {
+    border-right: 0;
+    border-bottom: 1px solid var(--fx-line-soft);
+  }
+  .app-shell .profile-detail-row:last-child { border-bottom: 0; }
   .app-shell .response-incident-bar { align-items: flex-start; gap: 8px; }
   .app-shell .status-chip { display: none; }
 }

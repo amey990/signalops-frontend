@@ -138,6 +138,20 @@ export type LoginContext = {
   tenant: { id: string; name: string; slug: string };
 };
 
+export type ApiAuthContext = {
+  id: string;
+  full_name: string;
+  email: string;
+  account_type: "admin";
+  status: "active";
+  is_platform_admin: boolean;
+  tenant_id: string;
+  role: string;
+  tenant_name: string;
+  tenant_slug: string;
+  permissions: string[];
+};
+
 export type ApiWorkspace = {
   tenant: {
     id: string;
@@ -300,13 +314,12 @@ export type ApiChannelSetting = {
 export const api = {
   hasAccessToken: () => Boolean(accessToken),
   async restore() {
-    if (!accessToken && !(await refreshSession())) return false;
+    if (!accessToken && !(await refreshSession())) return null;
     try {
-      await request("/auth/admin/me");
-      return true;
+      return await request<ApiAuthContext>("/auth/admin/me");
     } catch {
       clearAccessToken();
-      return false;
+      return null;
     }
   },
   async login(email: string, password: string, remember: boolean) {

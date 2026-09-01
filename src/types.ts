@@ -115,4 +115,5 @@ export type NavPage =
   | "facilities"
   | "templates"
   | "roles"
-  | "settings";
+  | "settings"
+  | "profile";
