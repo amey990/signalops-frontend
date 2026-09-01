@@ -312,7 +312,7 @@ export const api = {
   async login(email: string, password: string, remember: boolean) {
     const data = await request<LoginContext>(
       "/auth/admin/login",
-      { method: "POST", body: body({ email, password, tenantSlug: "avenir" }) },
+      { method: "POST", body: body({ email, password }) },
       false,
     );
     saveAccessToken(data.accessToken, remember);

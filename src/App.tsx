@@ -179,7 +179,7 @@ function App() {
   );
   const [tenant, setTenant] = useState<Tenant>({
     id: "",
-    slug: "avenir",
+    slug: "",
     name: "SignalOps",
     shortName: "SO",
     plan: "Organisation workspace",
