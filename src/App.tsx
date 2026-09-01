@@ -13,7 +13,7 @@ import {
   Building2,
   Check,
   CheckCircle2,
-  ChevronDown,
+  ChevronLeft,
   ChevronRight,
   CircleUserRound,
   Clock3,
@@ -39,8 +39,6 @@ import {
   UsersRound,
   X,
   Zap,
-  PanelLeftClose,
-  PanelLeftOpen,
   Inbox,
   Eye,
   EyeOff,
@@ -83,6 +81,7 @@ const navItems: {
   label: string;
   icon: typeof LayoutDashboard;
   group?: string;
+  placement?: "bottom";
 }[] = [
   { id: "overview", label: "Overview", icon: LayoutDashboard },
   { id: "broadcasts", label: "Alerts", icon: Radio },
@@ -91,7 +90,7 @@ const navItems: {
   { id: "facilities", label: "Facilities", icon: Building2 },
   { id: "templates", label: "Templates", icon: FileText, group: "MANAGE" },
   { id: "roles", label: "Roles & approvals", icon: ShieldCheck },
-  { id: "settings", label: "Settings", icon: Settings },
+  { id: "settings", label: "Settings", icon: Settings, placement: "bottom" },
 ];
 
 const pageTitles: Record<
@@ -175,7 +174,7 @@ function App() {
       : "overview";
   });
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
-    () => localStorage.getItem("signalops.sidebar") === "collapsed",
+    () => localStorage.getItem("signalops.sidebar") !== "expanded",
   );
   const [tenant, setTenant] = useState<Tenant>({
     id: "",
@@ -356,6 +355,17 @@ function App() {
     const timer = window.setTimeout(() => setToast(""), 3600);
     return () => window.clearTimeout(timer);
   }, [toast]);
+  useEffect(() => {
+    const openSearch = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setTenantMenu(false);
+        setHeaderPanel("search");
+      }
+    };
+    window.addEventListener("keydown", openSearch);
+    return () => window.removeEventListener("keydown", openSearch);
+  }, []);
 
   const tenantId = tenant.id;
   const tenants = useMemo(() => (tenant.id ? [tenant] : []), [tenant]);
@@ -394,6 +404,28 @@ function App() {
   const selectedBroadcast =
     broadcasts.find((item) => item.id === detailId) ?? null;
   const meta = pageTitles[page];
+  const now = new Date();
+  const indiaHour = Number(
+    new Intl.DateTimeFormat("en-IN", {
+      hour: "2-digit",
+      hourCycle: "h23",
+      timeZone: "Asia/Kolkata",
+    }).format(now),
+  );
+  const greeting =
+    indiaHour < 12
+      ? "Good morning"
+      : indiaHour < 17
+        ? "Good afternoon"
+        : "Good evening";
+  const todayLabel = new Intl.DateTimeFormat("en-IN", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    timeZone: "Asia/Kolkata",
+  })
+    .format(now)
+    .toUpperCase();
   const openComposer = (preset?: MessageTemplate) => {
     setComposerPreset(preset ?? null);
     setComposerOpen(true);
@@ -770,36 +802,48 @@ function App() {
           onClick={() => setSidebarCollapsed((value) => !value)}
         >
           {sidebarCollapsed ? (
-            <PanelLeftOpen size={17} />
+            <ChevronRight size={15} strokeWidth={1.8} />
           ) : (
-            <PanelLeftClose size={17} />
+            <ChevronLeft size={15} strokeWidth={1.8} />
           )}
         </button>
         <nav className="nav-list">
-          {navItems.map((item, index) => {
-            const Icon = item.icon;
-            return (
-              <div key={item.id}>
-                {item.group && <div className="nav-group">{item.group}</div>}
-                <button
-                  title={sidebarCollapsed ? item.label : undefined}
-                  aria-label={item.label}
-                  aria-current={page === item.id ? "page" : undefined}
-                  className={`nav-item ${page === item.id ? "active" : ""}`}
-                  onClick={() => navigate(item.id)}
-                >
-                  <Icon size={19} />
-                  <span>{item.label}</span>
-                  {item.id === "broadcasts" && activeBroadcasts.length > 0 && (
-                    <b>{activeBroadcasts.length}</b>
-                  )}
-                </button>
-                {index === 4 && <div className="nav-separator" />}
-              </div>
-            );
-          })}
+          {navItems
+            .filter((item) => item.placement !== "bottom")
+            .map((item, index) => {
+              const Icon = item.icon;
+              return (
+                <div key={item.id}>
+                  {item.group && <div className="nav-group">{item.group}</div>}
+                  <button
+                    title={sidebarCollapsed ? item.label : undefined}
+                    aria-label={item.label}
+                    aria-current={page === item.id ? "page" : undefined}
+                    className={`nav-item ${page === item.id ? "active" : ""}`}
+                    onClick={() => navigate(item.id)}
+                  >
+                    <Icon size={18} strokeWidth={1.8} />
+                    <span>{item.label}</span>
+                    {item.id === "broadcasts" &&
+                      activeBroadcasts.length > 0 && (
+                        <b>{activeBroadcasts.length}</b>
+                      )}
+                  </button>
+                  {index === 4 && <div className="nav-separator" />}
+                </div>
+              );
+            })}
         </nav>
         <div className="sidebar-bottom">
+          <button
+            title={sidebarCollapsed ? "Settings" : undefined}
+            aria-current={page === "settings" ? "page" : undefined}
+            className={`nav-item ${page === "settings" ? "active" : ""}`}
+            onClick={() => navigate("settings")}
+          >
+            <Settings size={18} strokeWidth={1.8} />
+            <span>Settings</span>
+          </button>
           <button
             title={sidebarCollapsed ? "Help & support" : undefined}
             className="nav-item"
@@ -808,32 +852,16 @@ function App() {
                 "mailto:support@signalops.in?subject=SignalOps support";
             }}
           >
-            <LifeBuoy size={19} />
+            <LifeBuoy size={18} strokeWidth={1.8} />
             <span>Help & support</span>
-          </button>
-          <button
-            title={sidebarCollapsed ? "Log out" : undefined}
-            className="nav-item logout-nav"
-            onClick={async () => {
-              await api.logout();
-              setAuthenticated(false);
-            }}
-          >
-            <LogOut size={19} />
-            <span>Log out</span>
           </button>
           <div className="user-card">
             <div className="avatar">
-              {currentUser.name
-                .split(/\s+/)
-                .map((part) => part[0])
-                .join("")
-                .slice(0, 2)
-                .toUpperCase()}
+              {tenant.shortName}
             </div>
             <div>
-              <strong>{currentUser.name}</strong>
-              <span>Organisation admin</span>
+              <strong>{tenant.name}</strong>
+              <span>{tenant.plan}</span>
             </div>
           </div>
         </div>
@@ -843,9 +871,23 @@ function App() {
         <header className="topbar">
           <button
             className="mobile-menu"
+            aria-label="Open navigation"
             onClick={() => setMobileNav((value) => !value)}
           >
-            <Menu size={22} />
+            <Menu size={20} />
+          </button>
+          <button
+            className={`global-search ${headerPanel === "search" ? "active" : ""}`}
+            onClick={() => {
+              setHeaderPanel((value) =>
+                value === "search" ? null : "search",
+              );
+              setTenantMenu(false);
+            }}
+          >
+            <Search size={17} />
+            <span>Search alerts, people or facilities...</span>
+            <kbd>Ctrl K</kbd>
           </button>
           <div className="tenant-wrap">
             <button
@@ -855,12 +897,18 @@ function App() {
                 setHeaderPanel(null);
               }}
             >
-              <span className="tenant-logo">{tenant.shortName}</span>
-              <span>
-                <b>{tenant.name}</b>
-                <small>{tenant.plan}</small>
+              <span className="tenant-logo">
+                {currentUser.name
+                  .split(/\s+/)
+                  .map((part) => part[0])
+                  .join("")
+                  .slice(0, 2)
+                  .toUpperCase()}
               </span>
-              <ChevronDown size={17} />
+              <span>
+                <b>{currentUser.name}</b>
+                <small>Organisation admin</small>
+              </span>
             </button>
             {tenantMenu && (
               <div className="tenant-dropdown">
@@ -887,6 +935,17 @@ function App() {
               </div>
             )}
           </div>
+          <button
+            className="top-signout"
+            title="Log out"
+            aria-label="Log out"
+            onClick={async () => {
+              await api.logout();
+              setAuthenticated(false);
+            }}
+          >
+            <LogOut size={18} strokeWidth={1.8} />
+          </button>
           <div className="top-actions">
             <button
               title="Search"
@@ -1037,14 +1096,27 @@ function App() {
         <main className="content" aria-busy={loadingData}>
           <div className="page-heading">
             <div>
-              <span className="eyebrow">{meta.eyebrow}</span>
+              <span className="eyebrow">
+                {page === "overview" ? todayLabel : meta.eyebrow}
+              </span>
               <h1>
                 {page === "overview"
-                  ? `Good morning, ${currentUser.name.split(" ")[0]}`
+                  ? `${greeting}, ${currentUser.name.split(" ")[0]}`
                   : meta.title}
               </h1>
               <p>{meta.subtitle}</p>
             </div>
+            {page === "overview" && (
+              <div className="page-actions">
+                <button
+                  className="primary-button"
+                  onClick={() => openComposer()}
+                >
+                  <Plus size={16} />
+                  Create alert
+                </button>
+              </div>
+            )}
             {page === "people" && (
               <div className="page-actions">
                 <button
@@ -1055,7 +1127,7 @@ function App() {
                   Add department
                 </button>
                 <button
-                  className="secondary-button"
+                  className="primary-button"
                   onClick={() => setAddPersonOpen(true)}
                 >
                   <Plus size={17} />
@@ -1420,7 +1492,10 @@ function PageAction({
     broadcasts: "Create alert",
   };
   return (
-    <button className="secondary-button" onClick={onAction}>
+    <button
+      className={page === "broadcasts" ? "primary-button" : "secondary-button"}
+      onClick={onAction}
+    >
       <Plus size={17} />
       {labels[page] ?? "Add"}
     </button>
@@ -1647,16 +1722,14 @@ function StatCard({
   tone: string;
 }) {
   return (
-    <div className="stat-card">
+    <article className="stat-card">
       <div className={`stat-icon ${tone}`}>
         <Icon size={21} />
       </div>
-      <div>
-        <span>{label}</span>
-        <strong>{value}</strong>
-        <small>{helper}</small>
-      </div>
-    </div>
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <small>{helper}</small>
+    </article>
   );
 }
 
@@ -1895,11 +1968,6 @@ function BroadcastsPage({
             resolved / archived
           </span>
         </div>
-        <p>
-          An alert is created manually, optionally approved, delivered through
-          selected channels, acknowledged when required, then resolved and
-          retained for audit.
-        </p>
       </div>
       <div className="alert-tabs" role="tablist" aria-label="Alert status">
         {(
@@ -2251,14 +2319,6 @@ function PeoplePage({
   };
   return (
     <>
-      <div className="context-note">
-        <UsersRound size={18} />
-        <p>
-          <b>Who receives alerts?</b> Administrators add people manually, assign
-          each person to a facility and building, then use saved groups or
-          locations as alert audiences.
-        </p>
-      </div>
       <div className="directory-stats">
         <div>
           <Users size={20} />
@@ -2891,15 +2951,6 @@ function FacilitiesPage({
     );
   return (
     <>
-      <div className="context-note">
-        <MapPin size={18} />
-        <p>
-          <b>How location targeting works</b> Administrators model each client
-          site as a facility with buildings. An alert can target the entire
-          organisation, one facility, or the people assigned to a specific
-          building.
-        </p>
-      </div>
       <div className="facility-layout">
         <div className="facility-list">
           {tenantFacilities.map((item) => (
@@ -3025,14 +3076,6 @@ function TemplatesPage({
   const [editing, setEditing] = useState<MessageTemplate | null>(null);
   return (
     <>
-      <div className="context-note">
-        <FileText size={18} />
-        <p>
-          <b>Templates control alert behavior</b> Each template fixes the alert
-          level, delivery channels and acknowledgement policy. A sender only
-          chooses the alert type, audience, and completes the message.
-        </p>
-      </div>
       <div className="template-grid">
         {templates.map((template) => (
           <div className="template-card" key={template.id}>
@@ -3155,15 +3198,6 @@ function RolesPage({
   const tones = ["purple", "red", "blue", "green", "grey"];
   return (
     <>
-      <div className="context-note">
-        <ShieldCheck size={18} />
-        <p>
-          <b>Governance without slowing emergencies</b> Routine senders follow
-          the configured approval workflow. Emergency controllers and
-          organisation administrators retain a clearly audited bypass for
-          immediate threats.
-        </p>
-      </div>
       <div className="governance-grid">
         <div className="panel roles-panel">
           <PanelHeader
