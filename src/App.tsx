@@ -325,7 +325,10 @@ function App() {
   useEffect(() => {
     const syncPageFromUrl = () => {
       const requested = window.location.hash.replace("#", "") as NavPage;
-      if (navItems.some((item) => item.id === requested)) setPage(requested);
+      if (navItems.some((item) => item.id === requested)) {
+        setPage(requested);
+        window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+      }
     };
     window.addEventListener("hashchange", syncPageFromUrl);
     return () => window.removeEventListener("hashchange", syncPageFromUrl);
@@ -400,6 +403,7 @@ function App() {
     setPage(nextPage);
     if (window.location.hash !== `#${nextPage}`)
       window.location.hash = nextPage;
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
     setMobileNav(false);
     setTenantMenu(false);
     setHeaderPanel(null);
@@ -779,6 +783,8 @@ function App() {
                 {item.group && <div className="nav-group">{item.group}</div>}
                 <button
                   title={sidebarCollapsed ? item.label : undefined}
+                  aria-label={item.label}
+                  aria-current={page === item.id ? "page" : undefined}
                   className={`nav-item ${page === item.id ? "active" : ""}`}
                   onClick={() => navigate(item.id)}
                 >
@@ -2667,6 +2673,16 @@ function ResponsesPage({
       );
     }
   };
+  if (!selectedAlert) {
+    return (
+      <div className="panel response-empty-panel">
+        <EmptyState
+          title="No acknowledgement alerts yet"
+          text="Employee responses will appear here after an alert requiring acknowledgement is sent."
+        />
+      </div>
+    );
+  }
   return (
     <>
       <div className="response-incident-bar">
@@ -2688,8 +2704,8 @@ function ResponsesPage({
             </select>
           </div>
         </div>
-        <span className="live-chip">
-          <i /> LIVE UPDATES
+        <span className="status-chip">
+          CURRENT STATUS
         </span>
       </div>
       <div className="response-stats">
@@ -5607,9 +5623,13 @@ function ChannelPills({
 function EmptyState({ title, text }: { title: string; text: string }) {
   return (
     <div className="empty-state">
-      <Search size={28} />
-      <b>{title}</b>
-      <p>{text}</p>
+      <span className="empty-state-icon">
+        <Inbox size={22} />
+      </span>
+      <div>
+        <b>{title}</b>
+        <p>{text}</p>
+      </div>
     </div>
   );
 }
