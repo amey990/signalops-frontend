@@ -157,10 +157,9 @@ const channelLabel: Record<Channel, string> = {
 function App() {
   const accountFlow = window.location.pathname.endsWith("/activate")
     ? "activate"
-    : window.location.pathname.endsWith("/forgot-password")
+    : window.location.pathname.endsWith("/forgot-password") ||
+        window.location.pathname.endsWith("/reset-password")
       ? "forgot"
-    : window.location.pathname.endsWith("/reset-password")
-      ? "reset"
       : null;
   const [authenticated, setAuthenticated] = useState(false);
   const [bootstrapping, setBootstrapping] = useState(true);
@@ -183,7 +182,7 @@ function App() {
     slug: "avenir",
     name: "SignalOps",
     shortName: "SO",
-    plan: "Demo workspace",
+    plan: "Organisation workspace",
     facilities: 0,
     people: 0,
   });
@@ -737,7 +736,7 @@ function App() {
   };
 
   if (accountFlow === "forgot") return <PasswordRecoveryPage />;
-  if (accountFlow) return <AccountPasswordPage mode={accountFlow} />;
+  if (accountFlow === "activate") return <AccountPasswordPage />;
   if (bootstrapping)
     return (
       <main className="login-page">
@@ -1291,7 +1290,7 @@ function AdminLogin({
     remember: boolean,
   ) => Promise<void>;
 }) {
-  const [email, setEmail] = useState("admin@avenir.in");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [remember, setRemember] = useState(true);
@@ -3336,14 +3335,14 @@ function RolesPage({
   );
 }
 
-function AccountPasswordPage({ mode }: { mode: "activate" | "reset" }) {
+function AccountPasswordPage() {
   const token = new URLSearchParams(window.location.search).get("token") || "";
   const [account, setAccount] = useState<{
     full_name: string;
     email: string;
     tenant_name: string;
   } | null>(null);
-  const [validating, setValidating] = useState(mode === "activate");
+  const [validating, setValidating] = useState(true);
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -3351,7 +3350,6 @@ function AccountPasswordPage({ mode }: { mode: "activate" | "reset" }) {
   const [complete, setComplete] = useState(false);
   const [saving, setSaving] = useState(false);
   useEffect(() => {
-    if (mode !== "activate") return;
     if (!token) {
       setError("This activation link is incomplete.");
       setValidating(false);
@@ -3368,7 +3366,7 @@ function AccountPasswordPage({ mode }: { mode: "activate" | "reset" }) {
         ),
       )
       .finally(() => setValidating(false));
-  }, [mode, token]);
+  }, [token]);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setError("");
@@ -3386,8 +3384,7 @@ function AccountPasswordPage({ mode }: { mode: "activate" | "reset" }) {
     }
     setSaving(true);
     try {
-      if (mode === "activate") await api.activateAccount(token, password);
-      else await api.resetPassword(token, password);
+      await api.activateAccount(token, password);
       setComplete(true);
     } catch (problem) {
       setError(
@@ -3406,9 +3403,7 @@ function AccountPasswordPage({ mode }: { mode: "activate" | "reset" }) {
           <h1>
             {complete
               ? "Password saved"
-              : mode === "activate"
-                ? "Activate your account"
-                : "Choose a new password"}
+              : "Activate your account"}
           </h1>
           <p>
             {complete
@@ -3461,15 +3456,9 @@ function AccountPasswordPage({ mode }: { mode: "activate" | "reset" }) {
               {error && <div className="login-error">{error}</div>}
               <button
                 className="login-submit"
-                disabled={
-                  validating || saving || (mode === "activate" && !account)
-                }
+                disabled={validating || saving || !account}
               >
-                {saving
-                  ? "Saving…"
-                  : mode === "activate"
-                    ? "Activate account"
-                    : "Reset password"}
+                {saving ? "Saving…" : "Activate account"}
               </button>
             </form>
           )}

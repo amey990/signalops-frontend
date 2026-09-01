@@ -71,7 +71,7 @@ export function tenantFromApi(workspace: ApiWorkspace): Tenant {
     slug: workspace.tenant.slug,
     name: workspace.tenant.name,
     shortName: initials(workspace.tenant.name),
-    plan: "Demo workspace",
+    plan: "Organisation workspace",
     facilities: workspace.counts.facilities,
     people: workspace.counts.employees,
   };

@@ -5,7 +5,7 @@ React/Vite administrator portal for the SignalOps notification platform. The por
 ## V1 capabilities
 
 - Administrator login with access-token refresh and logout
-- Invitation activation, password reset, and password recovery
+- Invitation activation and secure OTP-based password recovery
 - RDS-backed workspace overview, alerts, people, groups, departments, facilities, buildings, templates, roles, and settings
 - Employee and portal-user invitations
 - Custom role creation and permission assignment
@@ -13,7 +13,7 @@ React/Vite administrator portal for the SignalOps notification platform. The por
 - Immediate release or approval submission
 - Alert approval, resolution, delivery summaries, acknowledgements, reminders, and assistance escalation
 - SES, FCM, and future SMS channel configuration
-- Vercel and Netlify SPA routing for activation/reset links
+- Netlify SPA routing for account activation and password recovery
 
 ## Local setup
 
@@ -29,7 +29,7 @@ Open `http://localhost:5173` and sign in with an active portal account.
 
 ## Production configuration
 
-Set `VITE_API_BASE_URL=https://your-api-host/api/v1` in Vercel or Netlify before building. The backend must allow the deployed frontend origin through `CORS_ORIGINS`.
+Set `VITE_API_BASE_URL=https://your-api-host/api/v1` in Netlify before building. The backend must allow the deployed frontend origin through `CORS_ORIGINS`.
 
 For a frontend and API hosted on different sites, configure the backend with:
 
