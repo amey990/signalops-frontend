@@ -157,6 +157,8 @@ const channelLabel: Record<Channel, string> = {
 function App() {
   const accountFlow = window.location.pathname.endsWith("/activate")
     ? "activate"
+    : window.location.pathname.endsWith("/forgot-password")
+      ? "forgot"
     : window.location.pathname.endsWith("/reset-password")
       ? "reset"
       : null;
@@ -734,6 +736,7 @@ function App() {
     setAuthenticated(true);
   };
 
+  if (accountFlow === "forgot") return <PasswordRecoveryPage />;
   if (accountFlow) return <AccountPasswordPage mode={accountFlow} />;
   if (bootstrapping)
     return (
@@ -1293,7 +1296,6 @@ function AdminLogin({
   const [showPassword, setShowPassword] = useState(false);
   const [remember, setRemember] = useState(true);
   const [error, setError] = useState("");
-  const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -1362,35 +1364,17 @@ function AdminLogin({
               <button
                 type="button"
                 className="text-button"
-                onClick={async () => {
-                  setError("");
-                  setMessage("");
-                  if (!email.trim()) {
-                    setError("Enter your email address first.");
-                    return;
-                  }
-                  try {
-                    const result = await api.forgotPassword(email);
-                    setMessage(result.message);
-                  } catch (problem) {
-                    setError(
-                      problem instanceof SignalOpsApiError
-                        ? problem.message
-                        : "Unable to request a password reset.",
-                    );
-                  }
+                onClick={() => {
+                  const query = email.trim()
+                    ? `?email=${encodeURIComponent(email.trim())}`
+                    : "";
+                  window.location.href = `/forgot-password${query}`;
                 }}
               >
                 Forgot password?
               </button>
             </div>
             {error && <div className="login-error">{error}</div>}
-            {message && (
-              <div className="info-note">
-                <Mail size={17} />
-                <span>{message}</span>
-              </div>
-            )}
             <button className="login-submit" disabled={loading}>
               {loading ? "Signing in…" : "Sign in to admin portal"}
             </button>
@@ -3502,6 +3486,225 @@ function AccountPasswordPage({ mode }: { mode: "activate" | "reset" }) {
             src="/images/astro.png"
             alt="Astronaut floating in space"
           />
+        </aside>
+      </section>
+    </main>
+  );
+}
+
+function PasswordRecoveryPage() {
+  const initialEmail = new URLSearchParams(window.location.search).get("email") || "";
+  const [stage, setStage] = useState<"request" | "verify" | "password" | "complete">("request");
+  const [email, setEmail] = useState(initialEmail);
+  const [otp, setOtp] = useState("");
+  const [resetToken, setResetToken] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const problemMessage = (problem: unknown, fallback: string) =>
+    problem instanceof SignalOpsApiError ? problem.message : fallback;
+
+  const requestCode = async (event?: FormEvent) => {
+    event?.preventDefault();
+    setError("");
+    setMessage("");
+    if (!email.trim() || !/^\S+@\S+\.\S+$/.test(email.trim())) {
+      setError("Enter a valid email address.");
+      return;
+    }
+    setLoading(true);
+    try {
+      const result = await api.forgotPassword(email.trim());
+      setStage("verify");
+      setOtp("");
+      setMessage(`${result.message}. Check your inbox and spam folder.`);
+    } catch (problem) {
+      setError(problemMessage(problem, "Unable to send a verification code."));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const verifyCode = async (event: FormEvent) => {
+    event.preventDefault();
+    setError("");
+    setMessage("");
+    if (!/^\d{6}$/.test(otp)) {
+      setError("Enter the six-digit code from your email.");
+      return;
+    }
+    setLoading(true);
+    try {
+      const result = await api.verifyPasswordReset(email.trim(), otp);
+      setResetToken(result.resetToken);
+      setStage("password");
+    } catch (problem) {
+      setError(problemMessage(problem, "Unable to verify the code."));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const savePassword = async (event: FormEvent) => {
+    event.preventDefault();
+    setError("");
+    if (password.length < 10) {
+      setError("Use a password with at least 10 characters.");
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError("The passwords do not match.");
+      return;
+    }
+    if (!resetToken) {
+      setError("Your password reset session has expired. Request a new code.");
+      setStage("request");
+      return;
+    }
+    setLoading(true);
+    try {
+      await api.resetPassword(resetToken, password);
+      setResetToken("");
+      setStage("complete");
+    } catch (problem) {
+      setError(problemMessage(problem, "Unable to reset the password."));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const heading = stage === "request"
+    ? "Forgot your password?"
+    : stage === "verify"
+      ? "Check your email"
+      : stage === "password"
+        ? "Choose a new password"
+        : "Password reset";
+  const description = stage === "request"
+    ? "Enter your administrator email and we’ll send you a verification code."
+    : stage === "verify"
+      ? `Enter the six-digit code sent to ${email.trim()}.`
+      : stage === "password"
+        ? "Create a password with at least 10 characters."
+        : "Your password has been changed. You can now sign in.";
+
+  return (
+    <main className="login-page">
+      <section className="login-card">
+        <div className="login-form-section recovery-form-section">
+          <h1>{heading}</h1>
+          <p>{description}</p>
+
+          {stage === "request" && (
+            <form onSubmit={requestCode}>
+              <label htmlFor="recovery-email">Email</label>
+              <input
+                id="recovery-email"
+                className="login-input"
+                type="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                autoComplete="email"
+                autoFocus
+                required
+              />
+              {error && <div className="login-error" role="alert">{error}</div>}
+              <button className="login-submit" disabled={loading}>
+                {loading ? "Sending…" : "Send verification code"}
+              </button>
+            </form>
+          )}
+
+          {stage === "verify" && (
+            <form onSubmit={verifyCode}>
+              <label htmlFor="recovery-otp">Verification code</label>
+              <input
+                id="recovery-otp"
+                className="login-input recovery-otp"
+                type="text"
+                inputMode="numeric"
+                pattern="[0-9]{6}"
+                maxLength={6}
+                value={otp}
+                onChange={(event) => setOtp(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                autoComplete="one-time-code"
+                autoFocus
+                required
+              />
+              {message && <div className="info-note" role="status"><Mail size={17} /><span>{message}</span></div>}
+              {error && <div className="login-error" role="alert">{error}</div>}
+              <button className="login-submit" disabled={loading || otp.length !== 6}>
+                {loading ? "Verifying…" : "Verify code"}
+              </button>
+              <div className="recovery-actions">
+                <button type="button" className="text-button" disabled={loading} onClick={() => requestCode()}>
+                  Resend code
+                </button>
+                <button type="button" className="text-button" onClick={() => { setStage("request"); setError(""); setMessage(""); }}>
+                  Change email
+                </button>
+              </div>
+            </form>
+          )}
+
+          {stage === "password" && (
+            <form onSubmit={savePassword}>
+              <label htmlFor="recovery-password">New password</label>
+              <div className="login-password">
+                <input
+                  id="recovery-password"
+                  className="login-input"
+                  type={showPassword ? "text" : "password"}
+                  minLength={10}
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  autoComplete="new-password"
+                  autoFocus
+                  required
+                />
+                <button type="button" aria-label={showPassword ? "Hide password" : "Show password"} onClick={() => setShowPassword((value) => !value)}>
+                  {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                </button>
+              </div>
+              <label htmlFor="recovery-password-confirm">Confirm password</label>
+              <input
+                id="recovery-password-confirm"
+                className="login-input"
+                type={showPassword ? "text" : "password"}
+                minLength={10}
+                value={confirmPassword}
+                onChange={(event) => setConfirmPassword(event.target.value)}
+                autoComplete="new-password"
+                required
+              />
+              {error && <div className="login-error" role="alert">{error}</div>}
+              <button className="login-submit" disabled={loading}>
+                {loading ? "Saving…" : "Reset password"}
+              </button>
+            </form>
+          )}
+
+          {stage === "complete" && (
+            <button className="login-submit" onClick={() => { window.location.href = "/"; }}>
+              Continue to sign in
+            </button>
+          )}
+
+          {stage !== "complete" && (
+            <button type="button" className="recovery-back text-button" onClick={() => { window.location.href = "/"; }}>
+              Back to sign in
+            </button>
+          )}
+        </div>
+        <aside className="login-visual" aria-label="Secure SignalOps password recovery">
+          <div className="blob blob-1" />
+          <div className="blob blob-2" />
+          <div className="blob blob-3" />
+          <img className="astronaut-image" src="/images/astro.png" alt="Astronaut floating in space" />
         </aside>
       </section>
     </main>

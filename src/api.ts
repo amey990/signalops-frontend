@@ -358,6 +358,12 @@ export const api = {
       { method: "POST", body: body({ email }) },
       false,
     ),
+  verifyPasswordReset: (email: string, otp: string) =>
+    request<{ resetToken: string }>(
+      "/auth/forgot-password/verify",
+      { method: "POST", body: body({ email, otp }) },
+      false,
+    ),
   resetPassword: (token: string, password: string) =>
     request<{ reset: boolean }>(
       "/auth/reset-password",
