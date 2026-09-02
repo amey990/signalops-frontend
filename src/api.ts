@@ -407,6 +407,7 @@ export const api = {
   },
   validateInvitation: (token: string) =>
     request<{
+      status: "valid" | "completed" | "expired";
       audience: "portal" | "employee";
       expires_at: string;
       email: string;

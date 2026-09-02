@@ -161,6 +161,17 @@ const channelLabel: Record<Channel, string> = {
   email: "Email",
   android: "Android push",
 };
+const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+const indianMobilePattern = /^\+91[6-9]\d{9}$/;
+const isValidEmail = (value: string) => emailPattern.test(value.trim());
+const normaliseIndianMobile = (value: string) => {
+  const digits = value.replace(/\D/g, "");
+  if (digits.length === 10) return `+91${digits}`;
+  if (digits.length === 12 && digits.startsWith("91")) return `+${digits}`;
+  return value.trim();
+};
+const isValidIndianMobile = (value: string) =>
+  indianMobilePattern.test(normaliseIndianMobile(value));
 const alertStatusLabel: Record<AlertStatus, string> = {
   draft: "Draft",
   pending_approval: "Awaiting approval",
@@ -1345,7 +1356,6 @@ function App() {
               facilities={facilityRecords.filter(
                 (item) => item.tenantId === tenantId,
               )}
-              roles={roles.filter((role) => role.audience === "employee")}
               onRecipientsChange={syncRecipients}
               onDepartmentsChange={syncDepartments}
               onGroupsChange={syncGroups}
@@ -1506,14 +1516,14 @@ function AdminLogin({
   const [loading, setLoading] = useState(false);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!email.trim() || password.length < 8) {
+    if (!isValidEmail(email) || password.length < 8) {
       setError("Enter a valid administrator email and password.");
       return;
     }
     setLoading(true);
     setError("");
     try {
-      await onLogin(email, password, remember);
+      await onLogin(email.trim().toLowerCase(), password, remember);
     } catch (problem) {
       setError(
         problem instanceof SignalOpsApiError
@@ -1536,6 +1546,8 @@ function AdminLogin({
               id="admin-email"
               className="login-input"
               type="email"
+              required
+              maxLength={254}
               value={email}
               onChange={(event) => setEmail(event.target.value)}
               autoComplete="email"
@@ -2595,7 +2607,6 @@ function PeoplePage({
   departments,
   groups,
   facilities,
-  roles,
   onRecipientsChange,
   onDepartmentsChange,
   onGroupsChange,
@@ -2606,7 +2617,6 @@ function PeoplePage({
   departments: Department[];
   groups: AudienceGroup[];
   facilities: Facility[];
-  roles: ApiRole[];
   onRecipientsChange: (people: Recipient[]) => void;
   onDepartmentsChange: (departments: Department[]) => void;
   onGroupsChange: (groups: AudienceGroup[]) => void;
@@ -2882,7 +2892,6 @@ function PeoplePage({
           person={editingPerson}
           departments={departments}
           facilities={facilities}
-          roles={roles}
           onClose={() => setEditingPerson(null)}
           onSave={(next) => {
             onRecipientsChange(
@@ -3780,6 +3789,8 @@ function RolesPage({
 function AccountPasswordPage() {
   const token = new URLSearchParams(window.location.search).get("token") || "";
   const [account, setAccount] = useState<{
+    status: "valid" | "completed" | "expired";
+    audience: "portal" | "employee";
     full_name: string;
     email: string;
     tenant_name: string;
@@ -3789,24 +3800,31 @@ function AccountPasswordPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
-  const [complete, setComplete] = useState(false);
+  const [outcome, setOutcome] = useState<
+    "completed" | "expired" | "invalid" | null
+  >(null);
   const [saving, setSaving] = useState(false);
   useEffect(() => {
     if (!token) {
       setError("This activation link is incomplete.");
+      setOutcome("invalid");
       setValidating(false);
       return;
     }
     api
       .validateInvitation(token)
-      .then(setAccount)
-      .catch((problem) =>
+      .then((invitation) => {
+        setAccount(invitation);
+        if (invitation.status !== "valid") setOutcome(invitation.status);
+      })
+      .catch((problem) => {
         setError(
           problem instanceof SignalOpsApiError
             ? problem.message
             : "This activation link is invalid or expired.",
-        ),
-      )
+        );
+        setOutcome("invalid");
+      })
       .finally(() => setValidating(false));
   }, [token]);
   const submit = async (event: FormEvent) => {
@@ -3826,8 +3844,19 @@ function AccountPasswordPage() {
     }
     setSaving(true);
     try {
-      await api.activateAccount(token, password);
-      setComplete(true);
+      const result = await api.activateAccount(token, password);
+      setAccount((current) =>
+        current
+          ? {
+              ...current,
+              status: "completed",
+              audience:
+                result.audience === "employee" ? "employee" : "portal",
+              email: result.email,
+            }
+          : current,
+      );
+      setOutcome("completed");
     } catch (problem) {
       setError(
         problem instanceof SignalOpsApiError
@@ -3842,67 +3871,122 @@ function AccountPasswordPage() {
     <main className="login-page">
       <section className="login-card">
         <div className="login-form-section">
-          <h1>
-            {complete
-              ? "Password saved"
-              : "Activate your account"}
-          </h1>
-          <p>
-            {complete
-              ? "Your account is ready to use."
-              : validating
-                ? "Checking your secure link…"
-                : account
+          {validating ? (
+            <>
+              <h1>Checking invitation</h1>
+              <p>Verifying your secure SignalOps activation link.</p>
+              <div className="activation-status-card neutral" role="status">
+                <Clock3 size={22} />
+                <div>
+                  <b>Please wait</b>
+                  <span>This should only take a moment.</span>
+                </div>
+              </div>
+            </>
+          ) : outcome ? (
+            <>
+              <h1>
+                {outcome === "completed"
+                  ? "Account setup complete"
+                  : outcome === "expired"
+                    ? "Invitation expired"
+                    : "Invitation unavailable"}
+              </h1>
+              <p>
+                {outcome === "completed"
+                  ? account?.audience === "employee"
+                    ? "Your mobile account is active and ready to use."
+                    : "Your portal account is active and ready to use."
+                  : "This secure invitation can no longer be used."}
+              </p>
+              <div
+                className={`activation-status-card ${outcome === "completed" ? "success" : "neutral"}`}
+                role="status"
+              >
+                {outcome === "completed" ? (
+                  <CheckCircle2 size={24} />
+                ) : (
+                  <Clock3 size={24} />
+                )}
+                <div>
+                  <b>
+                    {outcome === "completed"
+                      ? account?.audience === "employee"
+                        ? "Continue in the SignalOps mobile app"
+                        : "Portal access activated"
+                      : "No further action is available on this link"}
+                  </b>
+                  <span>
+                    {outcome === "completed"
+                      ? account?.audience === "employee"
+                        ? `Open the SignalOps app and sign in using ${account.email}. You can safely close this page.`
+                        : "Continue to the administrator portal to sign in."
+                      : outcome === "expired"
+                        ? "Ask your organisation administrator to send a new invitation if setup was not completed."
+                        : error ||
+                          "The link may be incomplete, invalid, or already replaced by a newer invitation."}
+                  </span>
+                </div>
+              </div>
+              {outcome === "completed" && account?.audience === "portal" && (
+                <button
+                  className="login-submit activation-portal-action"
+                  onClick={() => {
+                    window.location.href = "/";
+                  }}
+                >
+                  Continue to portal sign in
+                </button>
+              )}
+            </>
+          ) : (
+            <>
+              <h1>Activate your account</h1>
+              <p>
+                {account
                   ? `${account.full_name}, finish setting up your ${account.tenant_name} account.`
                   : "Enter and confirm your new password."}
-          </p>
-          {complete ? (
-            <button
-              className="login-submit"
-              onClick={() => {
-                window.location.href = "/";
-              }}
-            >
-              Continue to sign in
-            </button>
-          ) : (
-            <form onSubmit={submit}>
-              <label htmlFor="new-password">New password</label>
-              <div className="login-password">
+              </p>
+              <form onSubmit={submit}>
+                <label htmlFor="new-password">New password</label>
+                <div className="login-password">
+                  <input
+                    id="new-password"
+                    className="login-input"
+                    type={showPassword ? "text" : "password"}
+                    minLength={10}
+                    required
+                    value={password}
+                    onChange={(event) => setPassword(event.target.value)}
+                    autoComplete="new-password"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((value) => !value)}
+                  >
+                    {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                  </button>
+                </div>
+                <label htmlFor="confirm-password">Confirm password</label>
                 <input
-                  id="new-password"
+                  id="confirm-password"
                   className="login-input"
                   type={showPassword ? "text" : "password"}
                   minLength={10}
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
+                  required
+                  value={confirmPassword}
+                  onChange={(event) => setConfirmPassword(event.target.value)}
                   autoComplete="new-password"
                 />
+                {error && <div className="login-error">{error}</div>}
                 <button
-                  type="button"
-                  onClick={() => setShowPassword((value) => !value)}
+                  className="login-submit"
+                  disabled={saving || !account}
                 >
-                  {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                  {saving ? "Saving…" : "Activate account"}
                 </button>
-              </div>
-              <label htmlFor="confirm-password">Confirm password</label>
-              <input
-                id="confirm-password"
-                className="login-input"
-                type={showPassword ? "text" : "password"}
-                minLength={10}
-                value={confirmPassword}
-                onChange={(event) => setConfirmPassword(event.target.value)}
-                autoComplete="new-password"
-              />
-              {error && <div className="login-error">{error}</div>}
-              <button
-                className="login-submit"
-                disabled={validating || saving || !account}
-              >
-                {saving ? "Saving…" : "Activate account"}
-              </button>
-            </form>
+              </form>
+            </>
           )}
         </div>
         <aside
@@ -3943,13 +4027,13 @@ function PasswordRecoveryPage() {
     event?.preventDefault();
     setError("");
     setMessage("");
-    if (!email.trim() || !/^\S+@\S+\.\S+$/.test(email.trim())) {
+    if (!isValidEmail(email)) {
       setError("Enter a valid email address.");
       return;
     }
     setLoading(true);
     try {
-      const result = await api.forgotPassword(email.trim());
+      const result = await api.forgotPassword(email.trim().toLowerCase());
       setStage("verify");
       setOtp("");
       setMessage(`${result.message}. Check your inbox and spam folder.`);
@@ -4037,6 +4121,7 @@ function PasswordRecoveryPage() {
                 id="recovery-email"
                 className="login-input"
                 type="email"
+                maxLength={254}
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
                 autoComplete="email"
@@ -4267,6 +4352,7 @@ function InvitePortalUserModal({
 }) {
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
+  const [validationError, setValidationError] = useState("");
   const [roleId, setRoleId] = useState(
     roles.find((role) => role.name === "Viewer")?.id || roles[0]?.id || "",
   );
@@ -4276,10 +4362,19 @@ function InvitePortalUserModal({
         className="small-modal"
         onSubmit={(event) => {
           event.preventDefault();
+          setValidationError("");
+          if (fullName.trim().length < 2) {
+            setValidationError("Enter the user’s full name.");
+            return;
+          }
+          if (!isValidEmail(email)) {
+            setValidationError("Enter a valid work email address.");
+            return;
+          }
           onSave({
             accountType: "admin",
             fullName: fullName.trim(),
-            email: email.trim(),
+            email: email.trim().toLowerCase(),
             roleIds: roleId ? [roleId] : [],
           });
         }}
@@ -4298,6 +4393,8 @@ function InvitePortalUserModal({
           <input
             className="form-input"
             required
+            minLength={2}
+            maxLength={160}
             value={fullName}
             onChange={(event) => setFullName(event.target.value)}
           />
@@ -4306,6 +4403,7 @@ function InvitePortalUserModal({
             className="form-input"
             type="email"
             required
+            maxLength={254}
             value={email}
             onChange={(event) => setEmail(event.target.value)}
           />
@@ -4329,6 +4427,11 @@ function InvitePortalUserModal({
               password.
             </span>
           </div>
+          {validationError && (
+            <div className="form-error" role="alert">
+              {validationError}
+            </div>
+          )}
         </div>
         <div className="modal-footer">
           <button type="button" className="text-button" onClick={onClose}>
@@ -5220,9 +5323,11 @@ function AddPersonModal({
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [role, setRole] = useState("");
-  const [roleId, setRoleId] = useState(
-    roles.find((item) => item.name === "Employee")?.id || roles[0]?.id || "",
-  );
+  const [validationError, setValidationError] = useState("");
+  const roleId =
+    roles.find(
+      (item) => item.audience === "employee" && item.name === "Employee",
+    )?.id ?? "";
   const [department, setDepartment] = useState(departments[0]?.name ?? "");
   const [facility, setFacility] = useState(tenantFacilities[0]?.name ?? "");
   const [building, setBuilding] = useState(
@@ -5233,6 +5338,26 @@ function AddPersonModal({
   );
   const submit = (event: FormEvent) => {
     event.preventDefault();
+    setValidationError("");
+    const normalisedPhone = normaliseIndianMobile(phone);
+    if (name.trim().length < 2) {
+      setValidationError("Enter the employee’s full name.");
+      return;
+    }
+    if (!isValidEmail(email)) {
+      setValidationError("Enter a valid work email address.");
+      return;
+    }
+    if (!isValidIndianMobile(phone)) {
+      setValidationError(
+        "Enter a valid Indian mobile number, for example +91 98765 43210.",
+      );
+      return;
+    }
+    if (!roleId) {
+      setValidationError("The system Employee role is unavailable.");
+      return;
+    }
     const initials = name
       .split(" ")
       .map((part) => part[0])
@@ -5249,11 +5374,11 @@ function AddPersonModal({
     onAdd({
       id: crypto.randomUUID(),
       tenantId,
-      name,
+      name: name.trim(),
       initials,
-      email,
-      phone,
-      role,
+      email: email.trim().toLowerCase(),
+      phone: normalisedPhone,
+      role: role.trim(),
       department,
       facility,
       building,
@@ -5284,6 +5409,8 @@ function AddPersonModal({
               <input
                 className="form-input"
                 required
+                minLength={2}
+                maxLength={160}
                 value={name}
                 onChange={(event) => setName(event.target.value)}
                 placeholder="e.g. Arun Mehta"
@@ -5295,6 +5422,7 @@ function AddPersonModal({
                 className="form-input"
                 type="email"
                 required
+                maxLength={254}
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
                 placeholder="name@company.in"
@@ -5304,9 +5432,14 @@ function AddPersonModal({
               <label>Mobile number</label>
               <input
                 className="form-input"
+                type="tel"
+                inputMode="tel"
                 required
+                maxLength={18}
+                title="Enter a 10-digit Indian mobile number with +91"
                 value={phone}
                 onChange={(event) => setPhone(event.target.value)}
+                onBlur={() => setPhone(normaliseIndianMobile(phone))}
                 placeholder="+91 98765 43210"
               />
             </div>
@@ -5315,6 +5448,7 @@ function AddPersonModal({
               <input
                 className="form-input"
                 required
+                maxLength={120}
                 value={role}
                 onChange={(event) => setRole(event.target.value)}
                 placeholder="e.g. Safety officer"
@@ -5335,18 +5469,10 @@ function AddPersonModal({
             </div>
             <div>
               <label>App role</label>
-              <select
-                className="form-input"
-                required
-                value={roleId}
-                onChange={(event) => setRoleId(event.target.value)}
-              >
-                {roles.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.name}
-                  </option>
-                ))}
-              </select>
+              <div className="form-input readonly-form-field" aria-readonly="true">
+                <span>Employee</span>
+                <small>Read only</small>
+              </div>
             </div>
             <div>
               <label>Facility</label>
@@ -5387,6 +5513,11 @@ function AddPersonModal({
               added.
             </span>
           </div>
+          {validationError && (
+            <div className="form-error" role="alert">
+              {validationError}
+            </div>
+          )}
         </div>
         <div className="modal-footer">
           <button type="button" className="text-button" onClick={onClose}>
@@ -5651,7 +5782,6 @@ function PersonEditorModal({
   person,
   departments,
   facilities,
-  roles,
   onClose,
   onSave,
   onDelete,
@@ -5659,12 +5789,12 @@ function PersonEditorModal({
   person: Recipient;
   departments: Department[];
   facilities: Facility[];
-  roles: ApiRole[];
   onClose: () => void;
   onSave: (person: Recipient) => void;
   onDelete: () => void;
 }) {
   const [draft, setDraft] = useState(person);
+  const [validationError, setValidationError] = useState("");
   const selectedFacility = facilities.find(
     (item) => item.name === draft.facility,
   );
@@ -5676,8 +5806,27 @@ function PersonEditorModal({
         className="small-modal"
         onSubmit={(event) => {
           event.preventDefault();
+          setValidationError("");
+          if (draft.name.trim().length < 2) {
+            setValidationError("Enter the employee’s full name.");
+            return;
+          }
+          if (!isValidEmail(draft.email)) {
+            setValidationError("Enter a valid work email address.");
+            return;
+          }
+          if (!isValidIndianMobile(draft.phone)) {
+            setValidationError(
+              "Enter a valid Indian mobile number, for example +91 98765 43210.",
+            );
+            return;
+          }
           onSave({
             ...draft,
+            name: draft.name.trim(),
+            email: draft.email.trim().toLowerCase(),
+            phone: normaliseIndianMobile(draft.phone),
+            role: draft.role.trim(),
             initials: draft.name
               .split(" ")
               .map((part) => part[0])
@@ -5700,6 +5849,8 @@ function PersonEditorModal({
               <input
                 className="form-input"
                 required
+                minLength={2}
+                maxLength={160}
                 value={draft.name}
                 onChange={(event) => field("name", event.target.value)}
               />
@@ -5710,6 +5861,7 @@ function PersonEditorModal({
                 className="form-input"
                 type="email"
                 required
+                maxLength={254}
                 value={draft.email}
                 onChange={(event) => field("email", event.target.value)}
               />
@@ -5718,9 +5870,14 @@ function PersonEditorModal({
               <label>Phone</label>
               <input
                 className="form-input"
+                type="tel"
+                inputMode="tel"
                 required
+                maxLength={18}
+                title="Enter a 10-digit Indian mobile number with +91"
                 value={draft.phone}
                 onChange={(event) => field("phone", event.target.value)}
+                onBlur={() => field("phone", normaliseIndianMobile(draft.phone))}
               />
             </div>
             <div>
@@ -5728,6 +5885,7 @@ function PersonEditorModal({
               <input
                 className="form-input"
                 required
+                maxLength={120}
                 value={draft.role}
                 onChange={(event) => field("role", event.target.value)}
               />
@@ -5759,22 +5917,10 @@ function PersonEditorModal({
             </div>
             <div>
               <label>App role</label>
-              <select
-                className="form-input"
-                value={draft.roleIds?.[0] || ""}
-                onChange={(event) =>
-                  setDraft((current) => ({
-                    ...current,
-                    roleIds: event.target.value ? [event.target.value] : [],
-                  }))
-                }
-              >
-                {roles.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.name}
-                  </option>
-                ))}
-              </select>
+              <div className="form-input readonly-form-field" aria-readonly="true">
+                <span>Employee</span>
+                <small>Read only</small>
+              </div>
             </div>
             <div>
               <label>Facility</label>
@@ -5810,6 +5956,11 @@ function PersonEditorModal({
               </select>
             </div>
           </div>
+          {validationError && (
+            <div className="form-error" role="alert">
+              {validationError}
+            </div>
+          )}
         </div>
         <div className="modal-footer">
           <button
