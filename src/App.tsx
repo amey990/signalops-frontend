@@ -4759,6 +4759,9 @@ function AlertComposer({
   const tenantFacilities = facilities.filter(
     (item) => item.tenantId === tenantId,
   );
+  const activeRecipients = recipients.filter(
+    (recipient) => recipient.status === "active",
+  );
   const [step, setStep] = useState(1);
   const [templateId, setTemplateId] = useState(
     preset?.id ?? templates[0]?.id ?? "",
@@ -4774,7 +4777,7 @@ function AlertComposer({
   const [facility, setFacility] = useState("All facilities");
   const [building, setBuilding] = useState("Entire facility");
   const [groupId, setGroupId] = useState(groups[0]?.id ?? "");
-  const [personId, setPersonId] = useState(recipients[0]?.id ?? "");
+  const [personId, setPersonId] = useState(activeRecipients[0]?.id ?? "");
   const [approval, setApproval] = useState<
     "Send immediately" | "Request approval" | "Save draft"
   >(canSendImmediately ? "Send immediately" : "Request approval");
@@ -4783,18 +4786,29 @@ function AlertComposer({
   );
   const locationCount =
     facility === "All facilities"
-      ? tenantFacilities.reduce((sum, item) => sum + item.people, 0)
+      ? activeRecipients.length
       : building === "Entire facility"
-        ? (selectedFacility?.people ?? 0)
-        : (selectedFacility?.buildings.find((item) => item.name === building)
-            ?.people ?? 0);
+        ? activeRecipients.filter(
+            (recipient) => recipient.facilityId === selectedFacility?.id,
+          ).length
+        : activeRecipients.filter(
+            (recipient) =>
+              recipient.buildingId ===
+              selectedFacility?.buildings.find(
+                (item) => item.name === building,
+              )?.id,
+          ).length;
   const selectedGroup = groups.find((item) => item.id === groupId);
-  const selectedPerson = recipients.find((item) => item.id === personId);
+  const activeGroupCount =
+    selectedGroup?.memberIds.filter((id) =>
+      activeRecipients.some((recipient) => recipient.id === id),
+    ).length ?? 0;
+  const selectedPerson = activeRecipients.find((item) => item.id === personId);
   const count =
     audienceType === "location"
       ? locationCount
       : audienceType === "group"
-        ? (selectedGroup?.memberIds.length ?? 0)
+        ? activeGroupCount
         : selectedPerson
           ? 1
           : 0;
@@ -4982,7 +4996,14 @@ function AlertComposer({
                   >
                     {groups.map((item) => (
                       <option key={item.id} value={item.id}>
-                        {item.name} · {item.memberIds.length} members
+                        {item.name} ·{" "}
+                        {
+                          item.memberIds.filter((id) =>
+                            activeRecipients.some(
+                              (recipient) => recipient.id === id,
+                            ),
+                          ).length
+                        } active members
                       </option>
                     ))}
                   </select>
@@ -4996,7 +5017,10 @@ function AlertComposer({
                     value={personId}
                     onChange={(event) => setPersonId(event.target.value)}
                   >
-                    {recipients.map((item) => (
+                    {!activeRecipients.length && (
+                      <option value="">No active employees available</option>
+                    )}
+                    {activeRecipients.map((item) => (
                       <option key={item.id} value={item.id}>
                         {item.name} · {item.facility} / {item.building}
                       </option>
