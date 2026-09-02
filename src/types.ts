@@ -99,7 +99,9 @@ export type Broadcast = {
   createdAt: string;
   createdBy: string;
   recipients: number;
+  sent: number;
   delivered: number;
+  retrying: number;
   acknowledged: number;
   failed: number;
   requiresAcknowledgement: boolean;

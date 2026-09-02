@@ -263,12 +263,14 @@ export type ApiAlert = {
   recipients: number;
   sent: number;
   delivered: number;
+  retrying: number;
   failed: number;
   acknowledged: number;
   channels: ("sms" | "email" | "push")[] | string;
   audience_names: string;
 };
 export type ApiAlertDelivery = {
+  id: string;
   channel: "sms" | "email" | "push";
   status:
     | "queued"
@@ -278,9 +280,27 @@ export type ApiAlertDelivery = {
     | "failed"
     | "skipped";
   provider: string | null;
+  providerMessageId: string | null;
+  attemptCount: number;
+  nextAttemptAt: string | null;
   sentAt: string | null;
   deliveredAt: string | null;
+  failedAt: string | null;
   failureCode: string | null;
+  failureMessage: string | null;
+  outboxStatus: "pending" | "processing" | "completed" | "failed" | "cancelled" | null;
+  outboxAttemptCount: number | null;
+  outboxRunAfter: string | null;
+  outboxLastError: string | null;
+  attempts: {
+    id: string;
+    delivery_id: string;
+    attempt_number: number;
+    response_status: number | null;
+    error_code: string | null;
+    duration_ms: number | null;
+    attempted_at: string;
+  }[];
 };
 export type ApiAlertRecipientDetail = {
   id: string;
@@ -291,6 +311,7 @@ export type ApiAlertRecipientDetail = {
   facility_name: string | null;
   building_name: string | null;
   acknowledgement_status: string | null;
+  acknowledgement_source: string | null;
   note: string | null;
   acknowledged_at: string | null;
   deliveries: ApiAlertDelivery[];
@@ -303,13 +324,23 @@ export type ApiAlertApproval = {
   note: string | null;
   created_at: string;
 };
-export type ApiAlertDetail = ApiAlert & {
+export type ApiAlertDetail = Omit<
+  ApiAlert,
+  "recipients" | "sent" | "delivered" | "retrying" | "failed" | "acknowledged"
+> & {
   created_by: string;
   approved_by_name: string | null;
   resolved_by_name: string | null;
+  cancelled_by_name: string | null;
   approved_at: string | null;
   submitted_at: string | null;
   cancelled_at: string | null;
+  recipient_count: number;
+  sent_count: number;
+  delivered_count: number;
+  retrying_count: number;
+  failed_count: number;
+  acknowledged_count: number;
   channels: ("sms" | "email" | "push")[];
   audiences: {
     id: string;
@@ -319,6 +350,22 @@ export type ApiAlertDetail = ApiAlert & {
   }[];
   recipients: ApiAlertRecipientDetail[];
   approvals: ApiAlertApproval[];
+  assistance: ApiAssistanceRequest[];
+  audit: ApiAuditEvent[];
+};
+export type ApiAssistanceRequest = {
+  id: string;
+  alert_recipient_id: string;
+  user_id: string;
+  employee_name: string;
+  status: "open" | "assigned" | "resolved" | "cancelled";
+  note: string | null;
+  assigned_to: string | null;
+  assigned_to_name: string | null;
+  resolved_by: string | null;
+  resolved_by_name: string | null;
+  created_at: string;
+  resolved_at: string | null;
 };
 export type ApiAuditEvent = {
   id: string;
@@ -530,6 +577,8 @@ export const api = {
     request<void>(`/admin/templates/${id}`, { method: "DELETE" }),
   alerts: () => request<ApiAlert[]>("/admin/alerts?limit=100"),
   alert: (id: string) => request<ApiAlertDetail>(`/admin/alerts/${id}`),
+  alertAudit: (id: string) =>
+    request<ApiAuditEvent[]>(`/admin/alerts/${id}/audit`),
   createAlert: (value: unknown) =>
     request<ApiAlert & { recipientCount: number; deliveryCount: number }>(
       "/admin/alerts",
@@ -539,7 +588,7 @@ export const api = {
     request(`/admin/alerts/${id}/approve`, { method: "POST", body: "{}" }),
   submitAlert: (id: string) =>
     request(`/admin/alerts/${id}/submit`, { method: "POST", body: "{}" }),
-  returnAlert: (id: string, note?: string) =>
+  returnAlert: (id: string, note: string) =>
     request(`/admin/alerts/${id}/return`, {
       method: "POST",
       body: body({ note }),

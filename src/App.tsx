@@ -50,6 +50,7 @@ import {
   type ApiAuthContext,
   type ApiCategory,
   type ApiChannelSetting,
+  type ApiAlertDelivery,
   type ApiAlertDetail,
   type ApiAuditEvent,
   type ApiPermission,
@@ -186,6 +187,35 @@ const historicalAlertStatuses: AlertStatus[] = [
   "cancelled",
   "failed",
 ];
+const unreleasedAlertStatuses: AlertStatus[] = [
+  "draft",
+  "pending_approval",
+  "scheduled",
+];
+const deliverySummary = (alert: Broadcast) => {
+  if (unreleasedAlertStatuses.includes(alert.status)) return "Not released";
+  if (alert.retrying)
+    return `${alert.retrying} channel send${alert.retrying === 1 ? "" : "s"} retrying`;
+  if (alert.failed)
+    return `${alert.failed} channel send${alert.failed === 1 ? "" : "s"} permanently failed`;
+  if (alert.delivered) return `${alert.delivered} confirmed delivered`;
+  if (alert.sent) return `${alert.sent} accepted by provider`;
+  return "No delivery activity";
+};
+const formatTimestamp = (value?: string | null) =>
+  value ? new Date(value).toLocaleString("en-IN") : "—";
+const deliveryState = (delivery: ApiAlertDelivery) =>
+  delivery.status === "failed" && delivery.nextAttemptAt
+    ? "retrying"
+    : delivery.status;
+const deliveryStateLabel = (delivery: ApiAlertDelivery) => {
+  const state = deliveryState(delivery);
+  if (state === "sent") return "Accepted by provider";
+  if (state === "delivered") return "Confirmed delivered";
+  if (state === "retrying") return "Retry scheduled";
+  if (state === "failed") return "Permanently failed";
+  return state.replaceAll("_", " ");
+};
 
 type CurrentUser = {
   id: string;
@@ -456,13 +486,16 @@ function App() {
   }, []);
 
   const tenantId = tenant.id;
-  const hasPermission = (...required: string[]) =>
-    currentUser.isPlatformAdmin ||
-    currentUser.permissions.includes("*") ||
-    required.some((permission) =>
-      currentUser.permissions.includes(permission),
-    );
-  const canViewPage = (target: NavPage) => {
+  const hasPermission = useCallback(
+    (...required: string[]) =>
+      currentUser.isPlatformAdmin ||
+      currentUser.permissions.includes("*") ||
+      required.some((permission) =>
+        currentUser.permissions.includes(permission),
+      ),
+    [currentUser.isPlatformAdmin, currentUser.permissions],
+  );
+  const canViewPage = useCallback((target: NavPage) => {
     if (target === "profile") return true;
     if (target === "broadcasts" || target === "responses")
       return hasPermission("alerts.read");
@@ -475,7 +508,13 @@ function App() {
     if (target === "facilities")
       return hasPermission("workspace.read", "directory.manage");
     return hasPermission("workspace.read");
-  };
+  }, [hasPermission]);
+  useEffect(() => {
+    if (!authenticated || canViewPage(page)) return;
+    const fallback = navItems.find((item) => canViewPage(item.id))?.id ?? "profile";
+    setPage(fallback);
+    window.location.hash = fallback;
+  }, [authenticated, canViewPage, page]);
   const tenantBroadcasts = broadcasts.filter(
     (item) => item.tenantId === tenantId,
   );
@@ -486,15 +525,15 @@ function App() {
     (item) => item.status === "active",
   );
   const deliveryTotal = tenantBroadcasts.reduce(
-    (sum, item) => sum + item.delivered + item.failed,
+    (sum, item) => sum + item.sent + item.failed,
     0,
   );
-  const deliveredTotal = tenantBroadcasts.reduce(
-    (sum, item) => sum + item.delivered,
+  const acceptedTotal = tenantBroadcasts.reduce(
+    (sum, item) => sum + item.sent,
     0,
   );
   const deliveryRate = deliveryTotal
-    ? Math.round((deliveredTotal / deliveryTotal) * 1000) / 10
+    ? Math.round((acceptedTotal / deliveryTotal) * 1000) / 10
     : null;
   const criticalAttention = activeBroadcasts.filter(
     (item) => item.severity === "critical",
@@ -555,7 +594,9 @@ function App() {
       | "tenantId"
       | "createdAt"
       | "createdBy"
+      | "sent"
       | "delivered"
+      | "retrying"
       | "acknowledged"
       | "failed"
     >,
@@ -588,7 +629,9 @@ function App() {
       setDetailId(created.public_id);
       navigate("broadcasts");
       setToast(
-        draft.status === "draft"
+        created.status === "failed"
+          ? "Alert created, but no selected delivery channel was eligible"
+          : draft.status === "draft"
           ? "Alert saved as a draft"
           : draft.status === "pending_approval"
             ? "Alert submitted for approval"
@@ -607,9 +650,16 @@ function App() {
     const alert = broadcasts.find((item) => item.id === id);
     if (!alert?.backendId) return;
     try {
-      await action(alert.backendId);
+      const outcome = await action(alert.backendId);
       await loadWorkspace();
-      setToast(successMessage);
+      setToast(
+        outcome &&
+          typeof outcome === "object" &&
+          "status" in outcome &&
+          outcome.status === "failed"
+          ? "Alert could not be delivered through any selected channel"
+          : successMessage,
+      );
     } catch (error) {
       setToast(errorMessage(error));
       throw error;
@@ -1728,17 +1778,19 @@ function Overview({
         />
         <StatCard
           icon={Building2}
-          label="Active facilities"
+          label="Facilities"
           value={facilitiesCount}
           helper="Configured locations"
           tone="purple"
         />
         <StatCard
           icon={Gauge}
-          label="Delivery rate"
+          label="Provider acceptance"
           value={deliveryRate === null ? "—" : `${deliveryRate}%`}
           helper={
-            deliveryRate === null ? "No delivery activity yet" : "Last 30 days"
+            deliveryRate === null
+              ? "No completed channel sends"
+              : "Completed channel sends"
           }
           tone="green"
         />
@@ -1889,9 +1941,6 @@ function BroadcastRow({
   item: Broadcast;
   onClick: () => void;
 }) {
-  const percent = item.recipients
-    ? Math.round((item.delivered / item.recipients) * 100)
-    : 0;
   return (
     <button className="broadcast-row" onClick={onClick}>
       <span className={`severity-dot ${item.severity}`}>
@@ -1905,10 +1954,8 @@ function BroadcastRow({
       </div>
       <ChannelPills channels={item.channels} compact />
       <div className="delivery-cell">
-        <b>{percent}%</b>
-        <small>
-          {item.delivered}/{item.recipients} delivered
-        </small>
+        <b>{unreleasedAlertStatuses.includes(item.status) ? "—" : item.sent}</b>
+        <small>{deliverySummary(item)}</small>
       </div>
       <span className={`status-pill ${item.status}`}>
         {alertStatusLabel[item.status]}
@@ -2007,7 +2054,7 @@ function BroadcastsPage({
   isPlatformAdmin: boolean;
   onSubmit: (id: string) => Promise<void>;
   onApprove: (id: string) => Promise<void>;
-  onReturn: (id: string, note?: string) => Promise<void>;
+  onReturn: (id: string, note: string) => Promise<void>;
   onRelease: (id: string) => Promise<void>;
   onResolve: (id: string) => Promise<void>;
   onCancel: (id: string) => Promise<void>;
@@ -2086,7 +2133,7 @@ function BroadcastsPage({
   });
   const exportAlerts = () => {
     const csv = [
-      "ID,Title,Severity,Status,Audience,Location,Recipients,Delivered,Failed",
+      "ID,Title,Severity,Status,Audience,Location,Recipients,Provider accepted,Confirmed delivered,Retrying,Permanently failed",
       ...visible.map((item) =>
         [
           item.id,
@@ -2096,7 +2143,9 @@ function BroadcastsPage({
           item.audience,
           item.facility,
           item.recipients,
+          item.sent,
           item.delivered,
+          item.retrying,
           item.failed,
         ]
           .map((value) => `"${String(value).replaceAll('"', '""')}"`)
@@ -2147,7 +2196,21 @@ function BroadcastsPage({
                 ).length
               }
             </b>{" "}
-            resolved / archived
+            resolved
+          </span>
+        </div>
+        <div>
+          <X size={19} />
+          <span>
+            <b>{broadcasts.filter((item) => item.status === "cancelled").length}</b>{" "}
+            cancelled
+          </span>
+        </div>
+        <div>
+          <AlertTriangle size={19} />
+          <span>
+            <b>{broadcasts.filter((item) => item.status === "failed").length}</b>{" "}
+            failed
           </span>
         </div>
       </div>
@@ -2211,7 +2274,6 @@ function BroadcastsPage({
               onChange={(event) => setChannelFilter(event.target.value)}
             >
               <option value="all">All channels</option>
-              <option value="sms">SMS</option>
               <option value="email">Email</option>
               <option value="android">Mobile app</option>
             </select>
@@ -2249,20 +2311,8 @@ function BroadcastsPage({
                 <small>{item.facility}</small>
               </span>
               <span>
-                <b>
-                  {item.delivered}/{item.recipients}
-                </b>
-                <small>
-                  {["draft", "pending_approval", "scheduled"].includes(
-                    item.status,
-                  )
-                    ? "Not released"
-                    : item.failed
-                      ? `${item.failed} recipients failed`
-                      : item.delivered >= item.recipients
-                        ? "All recipients reached"
-                        : `${item.delivered} recipients reached`}
-                </small>
+                <b>{unreleasedAlertStatuses.includes(item.status) ? "—" : `${item.sent} accepted`}</b>
+                <small>{deliverySummary(item)}</small>
               </span>
               <span className={`status-pill ${item.status}`}>
                 {alertStatusLabel[item.status]}
@@ -2334,19 +2384,80 @@ function BroadcastsPage({
               </span>
               {detailLoading && <small>Refreshing details...</small>}
             </div>
+            {detail && (
+              <dl className="lifecycle-metadata">
+                <div>
+                  <dt>Created</dt>
+                  <dd>{formatTimestamp(detail.created_at)}</dd>
+                </div>
+                {detail.submitted_at && (
+                  <div>
+                    <dt>Submitted</dt>
+                    <dd>{formatTimestamp(detail.submitted_at)}</dd>
+                  </div>
+                )}
+                {detail.approved_at && (
+                  <div>
+                    <dt>Approved</dt>
+                    <dd>
+                      {detail.approved_by_name || "Authorised user"} ·{" "}
+                      {formatTimestamp(detail.approved_at)}
+                    </dd>
+                  </div>
+                )}
+                {detail.resolved_at && (
+                  <div>
+                    <dt>Resolved</dt>
+                    <dd>
+                      {detail.resolved_by_name || "Authorised user"} ·{" "}
+                      {formatTimestamp(detail.resolved_at)}
+                    </dd>
+                  </div>
+                )}
+                {detail.cancelled_at && (
+                  <div>
+                    <dt>Cancelled</dt>
+                    <dd>
+                      {detail.cancelled_by_name || "Authorised user"} ·{" "}
+                      {formatTimestamp(detail.cancelled_at)}
+                    </dd>
+                  </div>
+                )}
+              </dl>
+            )}
+            {selected.status === "failed" && (
+              <div className="delivery-failure-note">
+                <AlertTriangle size={18} />
+                <span>
+                  <b>Delivery failed</b>
+                  <small>
+                    No selected channel completed delivery. See each recipient's
+                    eligibility, retry history, and failure reason below.
+                  </small>
+                </span>
+              </div>
+            )}
             <h3>Delivery progress</h3>
             <div className="delivery-stats">
               <div>
-                <b>{selected.recipients}</b>
-                <span>Targeted</span>
+                <b>{detail?.recipient_count ?? selected.recipients}</b>
+                <span>Recipients</span>
               </div>
               <div>
-                <b>{selected.delivered}</b>
-                <span>Delivered</span>
+                <b>{detail?.sent_count ?? selected.sent}</b>
+                <span>Provider accepted</span>
               </div>
               <div>
-                <b>{selected.failed}</b>
-                <span>Failed</span>
+                <b>{detail?.delivered_count ?? selected.delivered}</b>
+                <span>Confirmed delivered</span>
+              </div>
+              <div>
+                <b>{detail?.retrying_count ?? selected.retrying}</b>
+                <span>Retrying</span>
+              </div>
+              <div>
+                <b>{detail?.failed_count ?? selected.failed}</b>
+                <span>Permanent failures</span>
               </div>
             </div>
             {selected.requiresAcknowledgement && (
@@ -2357,9 +2468,11 @@ function BroadcastsPage({
                     Acknowledgements
                   </span>
                   <b>
-                    {selected.recipients
+                    {(detail?.recipient_count ?? selected.recipients)
                       ? Math.round(
-                          (selected.acknowledged / selected.recipients) * 100,
+                          ((detail?.acknowledged_count ?? selected.acknowledged) /
+                            (detail?.recipient_count ?? selected.recipients)) *
+                            100,
                         )
                       : 0}
                     %
@@ -2368,15 +2481,16 @@ function BroadcastsPage({
                 <div className="progress">
                   <i
                     style={{
-                      width: `${selected.recipients ? (selected.acknowledged / selected.recipients) * 100 : 0}%`,
+                      width: `${(detail?.recipient_count ?? selected.recipients) ? ((detail?.acknowledged_count ?? selected.acknowledged) / (detail?.recipient_count ?? selected.recipients)) * 100 : 0}%`,
                     }}
                   />
                 </div>
                 <p>
-                  <b>{selected.acknowledged} safe</b>
+                  <b>{detail?.acknowledged_count ?? selected.acknowledged} responded</b>
                   <span>
-                    {selected.recipients - selected.acknowledged} awaiting
-                    response
+                    {(detail?.recipient_count ?? selected.recipients) -
+                      (detail?.acknowledged_count ?? selected.acknowledged)}{" "}
+                    awaiting response
                   </span>
                 </p>
               </div>
@@ -2419,42 +2533,180 @@ function BroadcastsPage({
                 <div className="recipient-delivery-list">
                   {detail.recipients.map((recipient) => (
                     <div className="recipient-delivery-row" key={recipient.id}>
-                      <span>
-                        <b>{recipient.full_name}</b>
-                        <small>
-                          {[recipient.facility_name, recipient.building_name]
-                            .filter(Boolean)
-                            .join(" · ") || "No location assignment"}
-                        </small>
-                      </span>
-                      <span className="delivery-channel-results">
-                        {recipient.deliveries.map((delivery) => (
+                      <div className="recipient-delivery-head">
+                        <span>
+                          <b>{recipient.full_name}</b>
+                          <small>
+                            {[recipient.facility_name, recipient.building_name]
+                              .filter(Boolean)
+                              .join(" · ") || "No location assignment"}
+                          </small>
+                        </span>
+                        {selected.requiresAcknowledgement && (
                           <i
-                            className={delivery.status}
-                            key={`${recipient.id}-${delivery.channel}`}
-                            title={
-                              delivery.failureCode ||
-                              `${delivery.channel}: ${delivery.status}`
-                            }
+                            className={`acknowledgement-chip ${recipient.acknowledgement_status || "awaiting_response"}`}
                           >
-                            {delivery.channel === "push"
-                              ? "Push"
-                              : delivery.channel}
-                            : {delivery.status}
+                            {(recipient.acknowledgement_status || "awaiting response").replaceAll(
+                              "_",
+                              " ",
+                            )}
                           </i>
+                        )}
+                      </div>
+                      {recipient.acknowledgement_status && (
+                        <small className="recipient-response-detail">
+                          {recipient.note || "No response note"} ·{" "}
+                          {formatTimestamp(recipient.acknowledged_at)}
+                          {recipient.acknowledgement_source
+                            ? ` · ${recipient.acknowledgement_source}`
+                            : ""}
+                        </small>
+                      )}
+                      <div className="delivery-detail-list">
+                        {recipient.deliveries.map((delivery) => (
+                          <details
+                            className={`delivery-result ${deliveryState(delivery)}`}
+                            key={delivery.id}
+                          >
+                            <summary>
+                              <span>
+                                <b>
+                                  {delivery.channel === "push"
+                                    ? "Mobile push"
+                                    : delivery.channel.toUpperCase()}
+                                </b>
+                                <i>{deliveryStateLabel(delivery)}</i>
+                              </span>
+                              <small>
+                                {delivery.provider || "Provider not selected"} ·{" "}
+                                {delivery.attemptCount} attempt
+                                {delivery.attemptCount === 1 ? "" : "s"}
+                              </small>
+                            </summary>
+                            <dl>
+                              <div>
+                                <dt>Provider reference</dt>
+                                <dd>{delivery.providerMessageId || "—"}</dd>
+                              </div>
+                              <div>
+                                <dt>Accepted</dt>
+                                <dd>{formatTimestamp(delivery.sentAt)}</dd>
+                              </div>
+                              <div>
+                                <dt>Delivered</dt>
+                                <dd>{formatTimestamp(delivery.deliveredAt)}</dd>
+                              </div>
+                              {delivery.nextAttemptAt && (
+                                <div>
+                                  <dt>Next retry</dt>
+                                  <dd>{formatTimestamp(delivery.nextAttemptAt)}</dd>
+                                </div>
+                              )}
+                              {(delivery.failureCode || delivery.failureMessage) && (
+                                <div className="delivery-error-detail">
+                                  <dt>Last failure</dt>
+                                  <dd>
+                                    {[delivery.failureCode, delivery.failureMessage]
+                                      .filter(Boolean)
+                                      .join(": ")}
+                                  </dd>
+                                </div>
+                              )}
+                            </dl>
+                            {delivery.attempts.length > 0 && (
+                              <div className="delivery-attempts">
+                                <b>Attempt history</b>
+                                {delivery.attempts.map((attempt) => (
+                                  <small key={attempt.id}>
+                                    #{attempt.attempt_number} ·{" "}
+                                    {attempt.response_status
+                                      ? `Provider response ${attempt.response_status}`
+                                      : attempt.error_code || "No provider response"}
+                                    {attempt.duration_ms !== null
+                                      ? ` · ${attempt.duration_ms} ms`
+                                      : ""}
+                                    {` · ${formatTimestamp(attempt.attempted_at)}`}
+                                  </small>
+                                ))}
+                              </div>
+                            )}
+                          </details>
                         ))}
                         {!recipient.deliveries.length && (
-                          <i className="not-queued">
-                            {["draft", "pending_approval", "scheduled"].includes(
-                              selected.status,
-                            )
+                          <i className="delivery-not-queued">
+                            {unreleasedAlertStatuses.includes(selected.status)
                               ? "Not released"
                               : "No eligible channel"}
                           </i>
                         )}
+                      </div>
+                    </div>
+                  ))}
+                  {!detail.recipients.length && (
+                    <p>No recipient snapshot exists for this alert.</p>
+                  )}
+                </div>
+              </section>
+            )}
+
+            {detail?.assistance && detail.assistance.length > 0 && (
+              <section className="alert-detail-section">
+                <h3>Assistance requests</h3>
+                <div className="assistance-history">
+                  {detail.assistance.map((request) => (
+                    <div className={request.status} key={request.id}>
+                      <LifeBuoy size={16} />
+                      <span>
+                        <b>
+                          {request.employee_name} · {request.status}
+                        </b>
+                        <small>
+                          {request.note || "No note supplied"} ·{" "}
+                          {formatTimestamp(request.created_at)}
+                        </small>
+                        {(request.assigned_to_name || request.resolved_by_name) && (
+                          <small>
+                            {request.resolved_by_name
+                              ? `Resolved by ${request.resolved_by_name}`
+                              : `Assigned to ${request.assigned_to_name}`}
+                            {request.resolved_at
+                              ? ` · ${formatTimestamp(request.resolved_at)}`
+                              : ""}
+                          </small>
+                        )}
                       </span>
                     </div>
                   ))}
+                </div>
+              </section>
+            )}
+
+            {detail && (
+              <section className="alert-detail-section">
+                <h3>Immutable audit timeline</h3>
+                <div className="alert-audit-timeline">
+                  {detail.audit.map((event) => (
+                    <div key={event.id}>
+                      <Activity size={15} />
+                      <span>
+                        <b>
+                          {event.action
+                            .replaceAll(".", " ")
+                            .replace(/\b\w/g, (letter) => letter.toUpperCase())}
+                        </b>
+                        <small>
+                          {event.actor_name || "System"} ·{" "}
+                          {formatTimestamp(event.created_at)}
+                        </small>
+                      </span>
+                    </div>
+                  ))}
+                  {!can("audit.read") && (
+                    <p>Your role does not include access to audit events.</p>
+                  )}
+                  {can("audit.read") && !detail.audit.length && (
+                    <p>No audit events have been recorded for this alert.</p>
+                  )}
                 </div>
               </section>
             )}
@@ -3055,16 +3307,8 @@ function ResponsesPage({
       return;
     }
     api
-      .audit()
-      .then((events) =>
-        setAuditEvents(
-          events.filter(
-            (event) =>
-              event.entity_type === "alert" &&
-              event.entity_id === selectedAlert.backendId,
-          ),
-        ),
-      )
+      .alertAudit(selectedAlert.backendId)
+      .then(setAuditEvents)
       .catch((error) =>
         onNotify(
           error instanceof SignalOpsApiError
@@ -4845,7 +5089,9 @@ function AlertComposer({
       | "tenantId"
       | "createdAt"
       | "createdBy"
+      | "sent"
       | "delivered"
+      | "retrying"
       | "acknowledged"
       | "failed"
     >,
