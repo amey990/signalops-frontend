@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useRef,
   useState,
   type FormEvent,
   type ReactNode,
@@ -49,6 +50,8 @@ import {
   type ApiAuthContext,
   type ApiCategory,
   type ApiChannelSetting,
+  type ApiAlertDetail,
+  type ApiAuditEvent,
   type ApiPermission,
   type ApiRole,
   type ApiTenantSettings,
@@ -66,6 +69,7 @@ import {
 } from "./adapters";
 import type {
   AudienceGroup,
+  AlertStatus,
   Broadcast,
   Channel,
   Department,
@@ -157,6 +161,20 @@ const channelLabel: Record<Channel, string> = {
   email: "Email",
   android: "Android push",
 };
+const alertStatusLabel: Record<AlertStatus, string> = {
+  draft: "Draft",
+  pending_approval: "Awaiting approval",
+  scheduled: "Scheduled",
+  active: "Active",
+  resolved: "Resolved",
+  cancelled: "Cancelled",
+  failed: "Failed",
+};
+const historicalAlertStatuses: AlertStatus[] = [
+  "resolved",
+  "cancelled",
+  "failed",
+];
 
 type CurrentUser = {
   id: string;
@@ -165,6 +183,7 @@ type CurrentUser = {
   role: string;
   status: "active";
   isPlatformAdmin: boolean;
+  permissions: string[];
 };
 
 const currentUserFromSession = (session: ApiAuthContext): CurrentUser => ({
@@ -174,6 +193,7 @@ const currentUserFromSession = (session: ApiAuthContext): CurrentUser => ({
   role: session.role,
   status: session.status,
   isPlatformAdmin: session.is_platform_admin,
+  permissions: session.permissions,
 });
 
 const roleLabel = (user: CurrentUser) => {
@@ -193,6 +213,7 @@ function App() {
       ? "forgot"
       : null;
   const [authenticated, setAuthenticated] = useState(false);
+  const permissionsRef = useRef<string[]>([]);
   const [bootstrapping, setBootstrapping] = useState(true);
   const [loadingData, setLoadingData] = useState(false);
   const [currentUser, setCurrentUser] = useState<CurrentUser>({
@@ -202,6 +223,7 @@ function App() {
     role: "admin",
     status: "active",
     isPlatformAdmin: false,
+    permissions: [],
   });
   const [page, setPage] = useState<NavPage>(() => {
     const requested = window.location.hash.replace("#", "") as NavPage;
@@ -270,6 +292,10 @@ function App() {
   const loadWorkspace = useCallback(async () => {
     setLoadingData(true);
     try {
+      const granted = permissionsRef.current;
+      const allowed = (...required: string[]) =>
+        granted.includes("*") ||
+        required.some((permission) => granted.includes(permission));
       const [
         workspace,
         users,
@@ -283,15 +309,32 @@ function App() {
         settingsData,
       ] = await Promise.all([
         api.workspace(),
-        api.users(),
-        api.departments(),
-        api.facilities(),
-        api.groups(),
-        api.categories(),
-        api.templates(),
-        api.alerts(),
-        api.roles(),
-        api.settings(),
+        allowed("users.read") ? api.users() : Promise.resolve([]),
+        allowed("users.read", "directory.manage")
+          ? api.departments()
+          : Promise.resolve([]),
+        allowed("workspace.read", "directory.manage")
+          ? api.facilities()
+          : Promise.resolve([]),
+        allowed("users.read", "directory.manage")
+          ? api.groups()
+          : Promise.resolve([]),
+        allowed("workspace.read", "templates.manage")
+          ? api.categories()
+          : Promise.resolve([]),
+        allowed("workspace.read", "templates.manage")
+          ? api.templates()
+          : Promise.resolve([]),
+        allowed("alerts.read") ? api.alerts() : Promise.resolve([]),
+        allowed("users.read", "roles.manage")
+          ? api.roles()
+          : Promise.resolve([]),
+        allowed("workspace.read")
+          ? api.settings()
+          : Promise.resolve({
+              preferences: null as unknown as ApiTenantSettings,
+              channels: [] as ApiChannelSetting[],
+            }),
       ]);
       const nextTenant = tenantFromApi(workspace);
       setTenant(nextTenant);
@@ -326,6 +369,9 @@ function App() {
       .then(async (session) => {
         if (!active) return;
         if (session) {
+          permissionsRef.current = session.is_platform_admin
+            ? ["*"]
+            : session.permissions;
           setCurrentUser(currentUserFromSession(session));
           setAuthenticated(true);
           try {
@@ -399,6 +445,26 @@ function App() {
   }, []);
 
   const tenantId = tenant.id;
+  const hasPermission = (...required: string[]) =>
+    currentUser.isPlatformAdmin ||
+    currentUser.permissions.includes("*") ||
+    required.some((permission) =>
+      currentUser.permissions.includes(permission),
+    );
+  const canViewPage = (target: NavPage) => {
+    if (target === "profile") return true;
+    if (target === "broadcasts" || target === "responses")
+      return hasPermission("alerts.read");
+    if (target === "people")
+      return hasPermission("users.read", "directory.manage");
+    if (target === "roles")
+      return hasPermission("users.read", "roles.manage");
+    if (target === "templates")
+      return hasPermission("workspace.read", "templates.manage");
+    if (target === "facilities")
+      return hasPermission("workspace.read", "directory.manage");
+    return hasPermission("workspace.read");
+  };
   const tenantBroadcasts = broadcasts.filter(
     (item) => item.tenantId === tenantId,
   );
@@ -408,14 +474,11 @@ function App() {
   const activeBroadcasts = tenantBroadcasts.filter(
     (item) => item.status === "active",
   );
-  const attemptedAlerts = tenantBroadcasts.filter(
-    (item) => item.status !== "pending",
-  );
-  const deliveryTotal = attemptedAlerts.reduce(
-    (sum, item) => sum + item.recipients,
+  const deliveryTotal = tenantBroadcasts.reduce(
+    (sum, item) => sum + item.delivered + item.failed,
     0,
   );
-  const deliveredTotal = attemptedAlerts.reduce(
+  const deliveredTotal = tenantBroadcasts.reduce(
     (sum, item) => sum + item.delivered,
     0,
   );
@@ -457,6 +520,10 @@ function App() {
     .format(now)
     .toUpperCase();
   const openComposer = (preset?: MessageTemplate) => {
+    if (!hasPermission("alerts.create")) {
+      setToast("You do not have permission to create alerts");
+      return;
+    }
     setComposerPreset(preset ?? null);
     setComposerOpen(true);
   };
@@ -498,19 +565,43 @@ function App() {
             displayName: draft.audience,
           },
         ],
-        release: draft.status === "pending" ? "approval" : "immediate",
+        release:
+          draft.status === "draft"
+            ? "draft"
+            : draft.status === "pending_approval"
+              ? "approval"
+              : "immediate",
       });
       await loadWorkspace();
       setComposerOpen(false);
       setDetailId(created.public_id);
       navigate("broadcasts");
       setToast(
-        draft.status === "pending"
-          ? "Alert submitted for approval"
-          : "Alert sent successfully",
+        draft.status === "draft"
+          ? "Alert saved as a draft"
+          : draft.status === "pending_approval"
+            ? "Alert submitted for approval"
+            : "Alert sent successfully",
       );
     } catch (error) {
       setToast(errorMessage(error));
+    }
+  };
+
+  const runAlertAction = async (
+    id: string,
+    action: (backendId: string) => Promise<unknown>,
+    successMessage: string,
+  ) => {
+    const alert = broadcasts.find((item) => item.id === id);
+    if (!alert?.backendId) return;
+    try {
+      await action(alert.backendId);
+      await loadWorkspace();
+      setToast(successMessage);
+    } catch (error) {
+      setToast(errorMessage(error));
+      throw error;
     }
   };
 
@@ -693,7 +784,6 @@ function App() {
       city: city.trim(),
       state: stateParts.join(",").trim(),
       countryCode: "IN",
-      status: "connected",
       buildings: facility.buildings.map((building) => ({
         name: building.name,
         mapX: building.x,
@@ -728,7 +818,6 @@ function App() {
           addressLine: payload.addressLine,
           city: payload.city,
           state: payload.state,
-          status: payload.status,
         });
         for (const building of changed.buildings) {
           const buildingPayload = {
@@ -795,6 +884,7 @@ function App() {
 
   const login = async (email: string, password: string, remember: boolean) => {
     const context = await api.login(email, password, remember);
+    permissionsRef.current = context.user.permissions;
     setCurrentUser({
       id: context.user.id,
       name: context.user.fullName,
@@ -802,6 +892,7 @@ function App() {
       role: context.user.roles[0]?.name || "Organisation administrator",
       status: "active",
       isPlatformAdmin: false,
+      permissions: context.user.permissions,
     });
     await loadWorkspace();
     setAuthenticated(true);
@@ -845,7 +936,9 @@ function App() {
         </button>
         <nav className="nav-list">
           {navItems
-            .filter((item) => item.placement !== "bottom")
+            .filter(
+              (item) => item.placement !== "bottom" && canViewPage(item.id),
+            )
             .map((item, index) => {
               const Icon = item.icon;
               return (
@@ -871,15 +964,17 @@ function App() {
             })}
         </nav>
         <div className="sidebar-bottom">
-          <button
-            title={sidebarCollapsed ? "Settings" : undefined}
-            aria-current={page === "settings" ? "page" : undefined}
-            className={`nav-item ${page === "settings" ? "active" : ""}`}
-            onClick={() => navigate("settings")}
-          >
-            <Settings size={18} strokeWidth={1.8} />
-            <span>Settings</span>
-          </button>
+          {canViewPage("settings") && (
+            <button
+              title={sidebarCollapsed ? "Settings" : undefined}
+              aria-current={page === "settings" ? "page" : undefined}
+              className={`nav-item ${page === "settings" ? "active" : ""}`}
+              onClick={() => navigate("settings")}
+            >
+              <Settings size={18} strokeWidth={1.8} />
+              <span>Settings</span>
+            </button>
+          )}
           <button
             title={sidebarCollapsed ? "Help & support" : undefined}
             className="nav-item"
@@ -973,10 +1068,12 @@ function App() {
               <BellRing size={19} />
               {notificationCount > 0 && <i />}
             </button>
-            <button className="primary-button" onClick={() => openComposer()}>
-              <Plus size={18} />
-              Create alert
-            </button>
+            {hasPermission("alerts.create") && (
+              <button className="primary-button" onClick={() => openComposer()}>
+                <Plus size={18} />
+                Create alert
+              </button>
+            )}
             {headerPanel === "search" && (
               <div className="header-popover search-popover">
                 <span className="popover-label">SEARCH SIGNALOPS</span>
@@ -1105,7 +1202,7 @@ function App() {
               </h1>
               <p>{meta.subtitle}</p>
             </div>
-            {page === "overview" && (
+            {page === "overview" && hasPermission("alerts.create") && (
               <div className="page-actions">
                 <button
                   className="primary-button"
@@ -1118,20 +1215,24 @@ function App() {
             )}
             {page === "people" && (
               <div className="page-actions">
-                <button
-                  className="secondary-button"
-                  onClick={() => setAddDepartmentOpen(true)}
-                >
-                  <Plus size={17} />
-                  Add department
-                </button>
-                <button
-                  className="primary-button"
-                  onClick={() => setAddPersonOpen(true)}
-                >
-                  <Plus size={17} />
-                  Add person
-                </button>
+                {hasPermission("directory.manage") && (
+                  <button
+                    className="secondary-button"
+                    onClick={() => setAddDepartmentOpen(true)}
+                  >
+                    <Plus size={17} />
+                    Add department
+                  </button>
+                )}
+                {hasPermission("users.manage") && (
+                  <button
+                    className="primary-button"
+                    onClick={() => setAddPersonOpen(true)}
+                  >
+                    <Plus size={17} />
+                    Add person
+                  </button>
+                )}
               </div>
             )}
             {page !== "overview" &&
@@ -1139,7 +1240,10 @@ function App() {
               page !== "people" &&
               page !== "roles" &&
               page !== "responses" &&
-              page !== "profile" && (
+              page !== "profile" &&
+              (page !== "broadcasts" || hasPermission("alerts.create")) &&
+              (page !== "templates" || hasPermission("templates.manage")) &&
+              (page !== "facilities" || hasPermission("directory.manage")) && (
                 <PageAction
                   page={page}
                   onAction={() => {
@@ -1191,34 +1295,43 @@ function App() {
               onSelect={setDetailId}
               onClose={() => setDetailId(null)}
               onNotify={setToast}
-              onApprove={async (id) => {
-                const alert = broadcasts.find((item) => item.id === id);
-                if (!alert?.backendId) return;
-                try {
-                  await api.approveAlert(alert.backendId);
-                  await loadWorkspace();
-                  setToast("Alert approved and released to recipients");
-                } catch (error) {
-                  setToast(errorMessage(error));
-                }
-              }}
-              onResolve={async (id) => {
-                const alert = broadcasts.find((item) => item.id === id);
-                if (!alert?.backendId) return;
-                try {
-                  await api.resolveAlert(alert.backendId);
-                  await loadWorkspace();
-                  setToast("Incident marked as resolved");
-                } catch (error) {
-                  setToast(errorMessage(error));
-                }
-              }}
+              currentUserId={currentUser.id}
+              permissions={currentUser.permissions}
+              isPlatformAdmin={currentUser.isPlatformAdmin}
+              onSubmit={(id) =>
+                runAlertAction(id, api.submitAlert, "Alert submitted for approval")
+              }
+              onApprove={(id) =>
+                runAlertAction(
+                  id,
+                  api.approveAlert,
+                  "Alert approved and released to recipients",
+                )
+              }
+              onReturn={(id, note) =>
+                runAlertAction(
+                  id,
+                  (backendId) => api.returnAlert(backendId, note),
+                  "Alert returned to its creator for changes",
+                )
+              }
+              onRelease={(id) =>
+                runAlertAction(id, api.releaseAlert, "Alert released to recipients")
+              }
+              onResolve={(id) =>
+                runAlertAction(id, api.resolveAlert, "Incident marked as resolved")
+              }
+              onCancel={(id) =>
+                runAlertAction(id, api.cancelAlert, "Alert cancelled")
+              }
             />
           )}
           {page === "responses" && (
             <ResponsesPage
               broadcasts={tenantBroadcasts}
               recipients={tenantRecipients}
+              canManageResponses={hasPermission("responses.manage")}
+              canReadAudit={hasPermission("audit.read")}
               onNotify={setToast}
             />
           )}
@@ -1271,11 +1384,19 @@ function App() {
               portalUsers={recipients.filter(
                 (person) => person.accountType === "admin",
               )}
+              canManageRoles={hasPermission("roles.manage")}
+              canManageUsers={hasPermission("users.manage")}
+              canManageWorkspace={hasPermission("workspace.manage")}
               onReload={loadWorkspace}
               onNotify={setToast}
             />
           )}
-          {page === "settings" && <SettingsPage onNotify={setToast} />}
+          {page === "settings" && (
+            <SettingsPage
+              canManage={hasPermission("workspace.manage")}
+              onNotify={setToast}
+            />
+          )}
           {page === "profile" && (
             <ProfilePage
               user={currentUser}
@@ -1298,6 +1419,7 @@ function App() {
             (item) => item.tenantId === tenantId,
           )}
           preset={composerPreset}
+          canSendImmediately={hasPermission("alerts.send")}
           onClose={() => setComposerOpen(false)}
           onCreate={createBroadcast}
         />
@@ -1598,7 +1720,7 @@ function Overview({
           icon={Building2}
           label="Active facilities"
           value={facilitiesCount}
-          helper="Cloud connected"
+          helper="Configured locations"
           tone="purple"
         />
         <StatCard
@@ -1707,7 +1829,13 @@ function Overview({
                   : setting.channel.toUpperCase()
               }
               detail={setting.provider}
-              value={setting.is_enabled ? "Enabled" : "Disabled"}
+              value={
+                setting.channel === "sms"
+                  ? "Not available"
+                  : setting.is_enabled
+                    ? "Enabled"
+                    : "Disabled"
+              }
             />
           ))}
         </div>
@@ -1789,7 +1917,9 @@ function BroadcastRow({
           {item.delivered}/{item.recipients} delivered
         </small>
       </div>
-      <span className={`status-pill ${item.status}`}>{item.status}</span>
+      <span className={`status-pill ${item.status}`}>
+        {alertStatusLabel[item.status]}
+      </span>
       <ChevronRight size={17} />
     </button>
   );
@@ -1810,19 +1940,14 @@ function FacilitySnapshot({ facilities }: { facilities: Facility[] }) {
     <div className="panel facility-snapshot">
       <PanelHeader
         title={facility.name}
-        subtitle="Current building status"
-        action={
-          <span className="live-chip">
-            <i /> LIVE
-          </span>
-        }
+        subtitle="Employee assignments by building"
       />
       <div className="mini-map">
         <div className="map-road horizontal" />
         <div className="map-road vertical" />
         {facility.buildings.slice(0, 4).map((building, index) => (
           <div
-            className={`mini-building b${index + 1} ${building.status === "alert" ? "danger" : building.status}`}
+            className={`mini-building b${index + 1}`}
             key={building.id}
           >
             <span>{building.name}</span>
@@ -1832,19 +1957,7 @@ function FacilitySnapshot({ facilities }: { facilities: Facility[] }) {
         <div className="muster">M</div>
       </div>
       <div className="map-legend">
-        <span>
-          <i className="safe" />
-          Clear
-        </span>
-        <span>
-          <i className="warn" />
-          Advisory
-        </span>
-        <span>
-          <i className="danger" />
-          Active alert
-        </span>
-        <b>{facility.people} people on site</b>
+        <b>{facility.people} assigned employees</b>
       </div>
     </div>
   );
@@ -1881,35 +1994,95 @@ function BroadcastsPage({
   selected,
   onSelect,
   onClose,
+  currentUserId,
+  permissions,
+  isPlatformAdmin,
+  onSubmit,
   onApprove,
+  onReturn,
+  onRelease,
   onResolve,
+  onCancel,
   onNotify,
 }: {
   broadcasts: Broadcast[];
   selected: Broadcast | null;
   onSelect: (id: string) => void;
   onClose: () => void;
-  onApprove: (id: string) => void;
-  onResolve: (id: string) => void;
+  currentUserId: string;
+  permissions: string[];
+  isPlatformAdmin: boolean;
+  onSubmit: (id: string) => Promise<void>;
+  onApprove: (id: string) => Promise<void>;
+  onReturn: (id: string, note?: string) => Promise<void>;
+  onRelease: (id: string) => Promise<void>;
+  onResolve: (id: string) => Promise<void>;
+  onCancel: (id: string) => Promise<void>;
   onNotify: (message: string) => void;
 }) {
   const [query, setQuery] = useState("");
   const [severityFilter, setSeverityFilter] = useState("all");
   const [channelFilter, setChannelFilter] = useState("all");
-  const [view, setView] = useState<"active" | "pending" | "history" | "all">(
-    selected?.status === "pending"
-      ? "pending"
-      : selected?.status === "resolved"
-        ? "history"
-        : "active",
+  const [view, setView] = useState<
+    "active" | "pending_approval" | "draft" | "history" | "all"
+  >(
+    selected?.status === "pending_approval"
+      ? "pending_approval"
+      : selected?.status === "draft"
+        ? "draft"
+        : selected && historicalAlertStatuses.includes(selected.status)
+          ? "history"
+          : "active",
   );
+  const [detail, setDetail] = useState<ApiAlertDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [actionBusy, setActionBusy] = useState(false);
+  const can = (...required: string[]) =>
+    isPlatformAdmin ||
+    permissions.includes("*") ||
+    required.some((permission) => permissions.includes(permission));
+  const loadDetail = useCallback(async () => {
+    if (!selected?.backendId) {
+      setDetail(null);
+      return;
+    }
+    setDetailLoading(true);
+    try {
+      setDetail(await api.alert(selected.backendId));
+    } catch (error) {
+      onNotify(
+        error instanceof SignalOpsApiError
+          ? error.message
+          : "Unable to load alert details",
+      );
+      setDetail(null);
+    } finally {
+      setDetailLoading(false);
+    }
+  }, [onNotify, selected?.backendId]);
+  useEffect(() => {
+    void loadDetail();
+  }, [loadDetail]);
+  const perform = async (action: () => Promise<void>) => {
+    setActionBusy(true);
+    try {
+      await action();
+      await loadDetail();
+    } catch {
+      // The parent action reports the API error in the application toast.
+    } finally {
+      setActionBusy(false);
+    }
+  };
   const visible = broadcasts.filter((item) => {
     const matchesSearch = `${item.title} ${item.facility} ${item.createdBy}`
       .toLowerCase()
       .includes(query.toLowerCase());
     const matchesView =
       view === "all" ||
-      (view === "history" ? item.status === "resolved" : item.status === view);
+      (view === "history"
+        ? historicalAlertStatuses.includes(item.status)
+        : item.status === view);
     return (
       matchesSearch &&
       matchesView &&
@@ -1961,7 +2134,11 @@ function BroadcastsPage({
           <Inbox size={19} />
           <span>
             <b>
-              {broadcasts.filter((item) => item.status === "pending").length}
+              {
+                broadcasts.filter(
+                  (item) => item.status === "pending_approval",
+                ).length
+              }
             </b>{" "}
             awaiting approval
           </span>
@@ -1971,7 +2148,11 @@ function BroadcastsPage({
           <CheckCircle2 size={19} />
           <span>
             <b>
-              {broadcasts.filter((item) => item.status === "resolved").length}
+              {
+                broadcasts.filter((item) =>
+                  historicalAlertStatuses.includes(item.status),
+                ).length
+              }
             </b>{" "}
             resolved / archived
           </span>
@@ -1981,7 +2162,8 @@ function BroadcastsPage({
         {(
           [
             ["active", "Active"],
-            ["pending", "Awaiting approval"],
+            ["pending_approval", "Awaiting approval"],
+            ["draft", "Drafts"],
             ["history", "History"],
             ["all", "All alerts"],
           ] as const
@@ -2001,8 +2183,9 @@ function BroadcastsPage({
               {id === "all"
                 ? broadcasts.length
                 : id === "history"
-                  ? broadcasts.filter((item) => item.status === "resolved")
-                      .length
+                  ? broadcasts.filter((item) =>
+                      historicalAlertStatuses.includes(item.status),
+                    ).length
                   : broadcasts.filter((item) => item.status === id).length}
             </span>
           </button>
@@ -2077,11 +2260,19 @@ function BroadcastsPage({
                   {item.delivered}/{item.recipients}
                 </b>
                 <small>
-                  {item.failed ? `${item.failed} failed` : "All delivered"}
+                  {["draft", "pending_approval", "scheduled"].includes(
+                    item.status,
+                  )
+                    ? "Not released"
+                    : item.failed
+                      ? `${item.failed} recipients failed`
+                      : item.delivered >= item.recipients
+                        ? "All recipients reached"
+                        : `${item.delivered} recipients reached`}
                 </small>
               </span>
               <span className={`status-pill ${item.status}`}>
-                {item.status}
+                {alertStatusLabel[item.status]}
               </span>
               <ChevronRight size={17} />
             </button>
@@ -2144,6 +2335,12 @@ function BroadcastsPage({
                 </dd>
               </div>
             </dl>
+            <div className="alert-detail-status">
+              <span className={`status-pill ${selected.status}`}>
+                {alertStatusLabel[selected.status]}
+              </span>
+              {detailLoading && <small>Refreshing details...</small>}
+            </div>
             <h3>Delivery progress</h3>
             <div className="delivery-stats">
               <div>
@@ -2167,16 +2364,18 @@ function BroadcastsPage({
                     Acknowledgements
                   </span>
                   <b>
-                    {Math.round(
-                      (selected.acknowledged / selected.recipients) * 100,
-                    )}
+                    {selected.recipients
+                      ? Math.round(
+                          (selected.acknowledged / selected.recipients) * 100,
+                        )
+                      : 0}
                     %
                   </b>
                 </div>
                 <div className="progress">
                   <i
                     style={{
-                      width: `${(selected.acknowledged / selected.recipients) * 100}%`,
+                      width: `${selected.recipients ? (selected.acknowledged / selected.recipients) * 100 : 0}%`,
                     }}
                   />
                 </div>
@@ -2198,7 +2397,126 @@ function BroadcastsPage({
                 </span>
               </div>
             )}
-            {selected.status === "pending" && (
+
+            {detail?.approvals && detail.approvals.length > 0 && (
+              <section className="alert-detail-section">
+                <h3>Approval history</h3>
+                <div className="approval-history">
+                  {detail.approvals.map((approval) => (
+                    <div key={approval.id}>
+                      <ShieldCheck size={16} />
+                      <span>
+                        <b>
+                          {approval.reviewer_name} {approval.decision} the alert
+                        </b>
+                        <small>
+                          {new Date(approval.created_at).toLocaleString("en-IN")}
+                          {approval.note ? ` · ${approval.note}` : ""}
+                        </small>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {detail?.recipients && (
+              <section className="alert-detail-section">
+                <h3>Recipient delivery</h3>
+                <div className="recipient-delivery-list">
+                  {detail.recipients.map((recipient) => (
+                    <div className="recipient-delivery-row" key={recipient.id}>
+                      <span>
+                        <b>{recipient.full_name}</b>
+                        <small>
+                          {[recipient.facility_name, recipient.building_name]
+                            .filter(Boolean)
+                            .join(" · ") || "No location assignment"}
+                        </small>
+                      </span>
+                      <span className="delivery-channel-results">
+                        {recipient.deliveries.map((delivery) => (
+                          <i
+                            className={delivery.status}
+                            key={`${recipient.id}-${delivery.channel}`}
+                            title={
+                              delivery.failureCode ||
+                              `${delivery.channel}: ${delivery.status}`
+                            }
+                          >
+                            {delivery.channel === "push"
+                              ? "Push"
+                              : delivery.channel}
+                            : {delivery.status}
+                          </i>
+                        ))}
+                        {!recipient.deliveries.length && (
+                          <i className="not-queued">
+                            {["draft", "pending_approval", "scheduled"].includes(
+                              selected.status,
+                            )
+                              ? "Not released"
+                              : "No eligible channel"}
+                          </i>
+                        )}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {selected.status === "draft" &&
+              (can("alerts.create") || can("alerts.send")) && (
+                <div className="approval-actions">
+                  <div>
+                    <FileText size={18} />
+                    <span>
+                      <b>Draft alert</b>
+                      <small>Submit for review or release if authorised</small>
+                    </span>
+                  </div>
+                  {can("alerts.create") && (
+                    <button
+                      className="secondary-button"
+                      disabled={actionBusy}
+                      onClick={() =>
+                        perform(() => onSubmit(selected.id))
+                      }
+                    >
+                      Submit for approval
+                    </button>
+                  )}
+                  {can("alerts.send") && (
+                    <button
+                      className="primary-button"
+                      disabled={actionBusy}
+                      onClick={() => perform(() => onRelease(selected.id))}
+                    >
+                      <Send size={16} /> Release now
+                    </button>
+                  )}
+                </div>
+              )}
+            {selected.status === "scheduled" && can("alerts.send") && (
+              <div className="approval-actions">
+                <div>
+                  <Clock3 size={18} />
+                  <span>
+                    <b>Scheduled alert</b>
+                    <small>Release it now if the incident has started</small>
+                  </span>
+                </div>
+                <button
+                  className="primary-button"
+                  disabled={actionBusy}
+                  onClick={() => perform(() => onRelease(selected.id))}
+                >
+                  <Send size={16} /> Release now
+                </button>
+              </div>
+            )}
+            {selected.status === "pending_approval" && (
               <div className="approval-actions">
                 <div>
                   <ShieldCheck size={18} />
@@ -2207,32 +2525,83 @@ function BroadcastsPage({
                     <small>Submitted by {selected.createdBy}</small>
                   </span>
                 </div>
-                <button
-                  className="primary-button"
-                  onClick={() => onApprove(selected.id)}
-                >
-                  <Send size={16} />
-                  Approve & send
-                </button>
-                <button
-                  className="text-button"
-                  onClick={() =>
-                    onNotify("Alert returned to its creator for changes.")
-                  }
-                >
-                  Return for changes
-                </button>
+                {can("alerts.approve") &&
+                detail &&
+                detail.created_by !== currentUserId ? (
+                  <>
+                    <button
+                      className="primary-button"
+                      disabled={actionBusy}
+                      onClick={() => perform(() => onApprove(selected.id))}
+                    >
+                      <Send size={16} />
+                      Approve & send
+                    </button>
+                    <button
+                      className="text-button"
+                      disabled={actionBusy}
+                      onClick={() => {
+                        const note = window.prompt(
+                          "Explain what the creator must change:",
+                        );
+                        if (note === null) return;
+                        if (!note.trim()) {
+                          onNotify("A return reason is required");
+                          return;
+                        }
+                        void perform(() => onReturn(selected.id, note.trim()));
+                      }}
+                    >
+                      Return for changes
+                    </button>
+                  </>
+                ) : (
+                  <small>
+                    {detail?.created_by === currentUserId
+                      ? "A different authorised user must review this alert."
+                      : "You do not have permission to review this alert."}
+                  </small>
+                )}
+                {can("alerts.send") && (
+                  <button
+                    className="secondary-button"
+                    disabled={actionBusy}
+                    onClick={() => perform(() => onRelease(selected.id))}
+                  >
+                    Emergency release
+                  </button>
+                )}
               </div>
             )}
             {selected.status === "active" && (
-              <button
-                className="resolve-button"
-                onClick={() => onResolve(selected.id)}
-              >
-                <Check size={18} />
-                Mark incident resolved
-              </button>
+              <div className="alert-lifecycle-actions">
+                {can("alerts.resolve") && (
+                  <button
+                    className="resolve-button"
+                    disabled={actionBusy}
+                    onClick={() => perform(() => onResolve(selected.id))}
+                  >
+                    <Check size={18} />
+                    Mark incident resolved
+                  </button>
+                )}
+              </div>
             )}
+            {["draft", "pending_approval", "scheduled", "active"].includes(
+              selected.status,
+            ) &&
+              can("alerts.resolve") && (
+                <button
+                  className="danger-text-button alert-cancel-button"
+                  disabled={actionBusy}
+                  onClick={() => {
+                    if (window.confirm("Cancel this alert? This cannot be undone."))
+                      void perform(() => onCancel(selected.id));
+                  }}
+                >
+                  Cancel alert
+                </button>
+              )}
           </aside>
         )}
       </div>
@@ -2627,10 +2996,14 @@ type EmployeeResponse = {
 function ResponsesPage({
   broadcasts,
   recipients,
+  canManageResponses,
+  canReadAudit,
   onNotify,
 }: {
   broadcasts: Broadcast[];
   recipients: Recipient[];
+  canManageResponses: boolean;
+  canReadAudit: boolean;
   onNotify: (message: string) => void;
 }) {
   const acknowledgementAlerts = broadcasts.filter(
@@ -2640,6 +3013,7 @@ function ResponsesPage({
   const [filter, setFilter] = useState("all");
   const [query, setQuery] = useState("");
   const [responses, setResponses] = useState<EmployeeResponse[]>([]);
+  const [auditEvents, setAuditEvents] = useState<ApiAuditEvent[]>([]);
   const selectedAlert =
     acknowledgementAlerts.find((item) => item.id === alertId) ??
     acknowledgementAlerts[0];
@@ -2685,6 +3059,30 @@ function ResponsesPage({
         ),
       );
   }, [onNotify, selectedAlert?.backendId]);
+  useEffect(() => {
+    if (!selectedAlert?.backendId || !canReadAudit) {
+      setAuditEvents([]);
+      return;
+    }
+    api
+      .audit()
+      .then((events) =>
+        setAuditEvents(
+          events.filter(
+            (event) =>
+              event.entity_type === "alert" &&
+              event.entity_id === selectedAlert.backendId,
+          ),
+        ),
+      )
+      .catch((error) =>
+        onNotify(
+          error instanceof SignalOpsApiError
+            ? error.message
+            : "Unable to load incident audit history",
+        ),
+      );
+  }, [canReadAudit, onNotify, selectedAlert?.backendId]);
   const visible = responses
     .map((response) => ({
       response,
@@ -2707,7 +3105,7 @@ function ResponsesPage({
       ),
     );
   const remind = async (userIds?: string[]) => {
-    if (!selectedAlert?.backendId) return;
+    if (!selectedAlert?.backendId || !canManageResponses) return;
     try {
       await api.remindAlertRecipients(selectedAlert.backendId, userIds);
       setResponses((current) =>
@@ -2728,7 +3126,7 @@ function ResponsesPage({
     }
   };
   const escalate = async (response: EmployeeResponse, name: string) => {
-    if (!response.assistanceId) return;
+    if (!response.assistanceId || !canManageResponses) return;
     try {
       await api.updateAssistance(response.assistanceId, { status: "assigned" });
       update(response.personId, { escalated: true });
@@ -2821,10 +3219,12 @@ function ResponsesPage({
             <option value="awaiting">Awaiting response</option>
             <option value="assistance">Needs assistance</option>
           </select>
-          <button className="filter-button" onClick={() => remind()}>
-            <Send size={15} />
-            Remind all awaiting
-          </button>
+          {canManageResponses && (
+            <button className="filter-button" onClick={() => remind()}>
+              <Send size={15} />
+              Remind all awaiting
+            </button>
+          )}
         </div>
         <div className="response-table-head">
           <span>Employee</span>
@@ -2870,10 +3270,10 @@ function ResponsesPage({
                   </small>
                 </span>
                 <span>
-                  {response.status === "awaiting" && (
+                  {response.status === "awaiting" && canManageResponses && (
                     <button onClick={() => remind([person.id])}>Remind</button>
                   )}
-                  {response.status === "assistance" && (
+                  {response.status === "assistance" && canManageResponses && (
                     <button
                       className="danger"
                       disabled={!response.assistanceId}
@@ -2891,39 +3291,37 @@ function ResponsesPage({
       <div className="response-audit panel">
         <PanelHeader
           title="Incident response audit"
-          subtitle="Events the backend will retain as an immutable timeline"
+          subtitle="Immutable events recorded by the backend"
         />
         <div className="audit-events">
-          {responses
-            .filter((response) => response.status !== "awaiting")
-            .map((response) => {
-              const person = recipients.find(
-                (candidate) => candidate.id === response.personId,
-              );
-              return (
-                <div
-                  className={response.status === "assistance" ? "danger" : ""}
-                  key={response.personId}
-                >
-                  {response.status === "assistance" ? (
-                    <LifeBuoy size={17} />
-                  ) : (
-                    <CheckCircle2 size={17} />
-                  )}
-                  <span>
-                    <b>
-                      {person?.name || "Employee"}{" "}
-                      {response.status === "assistance"
-                        ? "requested assistance"
-                        : "confirmed safe"}
-                    </b>
-                    <small>Mobile app · {response.respondedAt}</small>
-                  </span>
-                </div>
-              );
-            })}
-          {!responses.some((response) => response.status !== "awaiting") && (
-            <p>No employee response events have been received yet.</p>
+          {auditEvents.map((event) => (
+            <div
+              className={event.action.includes("assistance") ? "danger" : ""}
+              key={event.id}
+            >
+              {event.action.includes("assistance") ? (
+                <LifeBuoy size={17} />
+              ) : (
+                <CheckCircle2 size={17} />
+              )}
+              <span>
+                <b>
+                  {event.action
+                    .replaceAll(".", " ")
+                    .replace(/\b\w/g, (letter) => letter.toUpperCase())}
+                </b>
+                <small>
+                  {event.actor_name || "System"} ·{" "}
+                  {new Date(event.created_at).toLocaleString("en-IN")}
+                </small>
+              </span>
+            </div>
+          ))}
+          {!canReadAudit && (
+            <p>Your role does not include permission to read audit events.</p>
+          )}
+          {canReadAudit && !auditEvents.length && (
+            <p>No audit events have been recorded for this alert yet.</p>
           )}
         </div>
       </div>
@@ -2984,9 +3382,6 @@ function FacilitiesPage({
         <div className="panel facility-detail">
           <div className="facility-detail-head">
             <div>
-              <span className="live-chip">
-                <i /> CONNECTED
-              </span>
               <h2>{selected.name}</h2>
               <p>
                 <MapPin size={15} />
@@ -3010,7 +3405,7 @@ function FacilitiesPage({
                 key={building.id}
                 title={`Edit ${building.name}`}
                 onClick={() => setEditing(selected)}
-                className={`site-building ${building.status}`}
+                className="site-building"
                 style={{
                   left: `${building.x}%`,
                   top: `${building.y}%`,
@@ -3023,26 +3418,13 @@ function FacilitiesPage({
                 <span>{building.people} people</span>
               </button>
             ))}
-            <div className="north">
-              N<span>↑</span>
-            </div>
-            <div className="map-scale">50 m</div>
           </div>
           <div className="building-summary">
             <span>
-              <b>{selected.people}</b> people on site
+              <b>{selected.people}</b> assigned employees
             </span>
             <span>
               <b>{selected.buildings.length}</b> buildings
-            </span>
-            <span>
-              <b>
-                {
-                  selected.buildings.filter((item) => item.status !== "clear")
-                    .length
-                }
-              </b>{" "}
-              areas need attention
             </span>
           </div>
         </div>
@@ -3143,11 +3525,17 @@ function TemplatesPage({
 function RolesPage({
   roles,
   portalUsers,
+  canManageRoles,
+  canManageUsers,
+  canManageWorkspace,
   onReload,
   onNotify,
 }: {
   roles: ApiRole[];
   portalUsers: Recipient[];
+  canManageRoles: boolean;
+  canManageUsers: boolean;
+  canManageWorkspace: boolean;
   onReload: () => Promise<void>;
   onNotify: (message: string) => void;
 }) {
@@ -3156,18 +3544,20 @@ function RolesPage({
   const [permissions, setPermissions] = useState<ApiPermission[]>([]);
   const [approvalEnabled, setApprovalEnabled] = useState(true);
   useEffect(() => {
-    api
-      .permissions()
-      .then(setPermissions)
-      .catch(() => onNotify("Unable to load role permissions"));
+    if (canManageRoles)
+      api
+        .permissions()
+        .then(setPermissions)
+        .catch(() => onNotify("Unable to load role permissions"));
     api
       .settings()
       .then((value) =>
         setApprovalEnabled(value.preferences.critical_alert_approval),
       )
       .catch(() => undefined);
-  }, [onNotify]);
+  }, [canManageRoles, onNotify]);
   const save = async (role: ApiRole) => {
+    if (!canManageRoles) return;
     try {
       const payload = {
         name: role.name,
@@ -3190,6 +3580,7 @@ function RolesPage({
     }
   };
   const toggleApproval = async () => {
+    if (!canManageWorkspace) return;
     try {
       const next = !approvalEnabled;
       await api.updateSettings({ criticalAlertApproval: next });
@@ -3212,7 +3603,9 @@ function RolesPage({
             title="Organisation roles"
             subtitle="Permissions follow least-privilege access"
             action={
+              canManageRoles || canManageUsers ? (
               <div className="page-actions">
+                {canManageUsers && (
                 <button
                   className="secondary-button"
                   onClick={() => setInviting(true)}
@@ -3220,6 +3613,8 @@ function RolesPage({
                   <Mail size={16} />
                   Invite portal user
                 </button>
+                )}
+                {canManageRoles && (
                 <button
                   className="secondary-button"
                   onClick={() =>
@@ -3238,7 +3633,9 @@ function RolesPage({
                   <Plus size={16} />
                   Create role
                 </button>
+                )}
               </div>
+              ) : undefined
             }
           />
           {roles.map((role, index) => (
@@ -3253,6 +3650,7 @@ function RolesPage({
               <span>{role.user_count} people</span>
               <button
                 title={`Manage ${role.name}`}
+                disabled={!canManageRoles}
                 onClick={() => setEditing(role)}
               >
                 <MoreHorizontal size={18} />
@@ -3282,6 +3680,7 @@ function RolesPage({
                     : `${person.name} is active`
                 }
                 disabled={person.status !== "invited"}
+                hidden={!canManageUsers}
                 onClick={async () => {
                   try {
                     await api.resendInvitation(person.id);
@@ -3354,14 +3753,18 @@ function RolesPage({
               </p>
             </div>
           </div>
-          <button className="secondary-button wide" onClick={toggleApproval}>
+          <button
+            className="secondary-button wide"
+            disabled={!canManageWorkspace}
+            onClick={toggleApproval}
+          >
             {approvalEnabled
               ? "Disable approval workflow"
               : "Enable approval workflow"}
           </button>
         </div>
       </div>
-      {editing && (
+      {editing && canManageRoles && (
         <RoleEditorModal
           role={editing}
           permissions={permissions}
@@ -3369,7 +3772,7 @@ function RolesPage({
           onSave={save}
         />
       )}
-      {inviting && (
+      {inviting && canManageUsers && (
         <InvitePortalUserModal
           roles={roles.filter((role) => role.audience === "portal")}
           onClose={() => setInviting(false)}
@@ -4062,7 +4465,13 @@ function ProfilePage({
   );
 }
 
-function SettingsPage({ onNotify }: { onNotify: (message: string) => void }) {
+function SettingsPage({
+  canManage,
+  onNotify,
+}: {
+  canManage: boolean;
+  onNotify: (message: string) => void;
+}) {
   const [preferences, setPreferences] = useState<ApiTenantSettings | null>(
     null,
   );
@@ -4084,6 +4493,7 @@ function SettingsPage({ onNotify }: { onNotify: (message: string) => void }) {
     void reload();
   }, [reload]);
   const updatePreference = async (value: Record<string, unknown>) => {
+    if (!canManage) return;
     try {
       setPreferences(await api.updateSettings(value));
       onNotify("Organisation settings updated");
@@ -4106,6 +4516,7 @@ function SettingsPage({ onNotify }: { onNotify: (message: string) => void }) {
           <ChannelSetting
             key={setting.id}
             setting={setting}
+            canManage={canManage}
             onSaved={reload}
             onNotify={onNotify}
           />
@@ -4126,7 +4537,9 @@ function SettingsPage({ onNotify }: { onNotify: (message: string) => void }) {
           title="Require acknowledgement"
           detail="Recipients must confirm they are safe"
           enabled={preferences?.require_critical_acknowledgement ?? true}
+          disabled={!canManage}
           onToggle={() =>
+            canManage &&
             updatePreference({
               requireCriticalAcknowledgement:
                 !preferences?.require_critical_acknowledgement,
@@ -4137,7 +4550,9 @@ function SettingsPage({ onNotify }: { onNotify: (message: string) => void }) {
           title="Require critical-alert approval"
           detail="A different authorised user reviews critical alerts"
           enabled={preferences?.critical_alert_approval ?? true}
+          disabled={!canManage}
           onToggle={() =>
+            canManage &&
             updatePreference({
               criticalAlertApproval: !preferences?.critical_alert_approval,
             })
@@ -4153,6 +4568,7 @@ function SettingsPage({ onNotify }: { onNotify: (message: string) => void }) {
           </div>
           <button
             className="filter-button"
+            disabled={!canManage}
             onClick={() =>
               updatePreference({
                 nonResponseEscalationMinutes:
@@ -4177,10 +4593,12 @@ function SettingsPage({ onNotify }: { onNotify: (message: string) => void }) {
 
 function ChannelSetting({
   setting,
+  canManage,
   onSaved,
   onNotify,
 }: {
   setting: ApiChannelSetting;
+  canManage: boolean;
   onSaved: () => Promise<void>;
   onNotify: (message: string) => void;
 }) {
@@ -4197,7 +4615,12 @@ function ChannelSetting({
     setting.channel === "push"
       ? "Mobile app push"
       : setting.channel.toUpperCase();
+  const unsupported = setting.channel === "sms";
   const save = async (enabled = setting.is_enabled) => {
+    if (unsupported) {
+      onNotify("SMS is not available until a production provider is integrated");
+      return;
+    }
     try {
       await api.updateChannel(setting.channel, {
         provider: providerValue,
@@ -4239,22 +4662,26 @@ function ChannelSetting({
           </>
         ) : (
           <>
-            <small>{setting.provider}</small>
+            <small>{unsupported ? "Provider not integrated" : setting.provider}</small>
             <em>
-              {setting.sender_identity || "Sender identity not configured"}
+              {unsupported
+                ? "SMS is excluded from alert and template creation"
+                : setting.sender_identity || "Sender identity not configured"}
             </em>
           </>
         )}
       </div>
       <button
-        className={`connected-pill ${setting.is_enabled ? "" : "disabled"}`}
+        className={`connected-pill ${setting.is_enabled && !unsupported ? "" : "disabled"}`}
+        disabled={unsupported || !canManage}
         onClick={() => save(!setting.is_enabled)}
       >
         <i />
-        {setting.is_enabled ? "Enabled" : "Disabled"}
+        {setting.is_enabled && !unsupported ? "Enabled" : "Disabled"}
       </button>
       <button
         className="filter-button"
+        disabled={unsupported || !canManage}
         onClick={editing ? () => save() : () => setEditing(true)}
       >
         {editing ? "Save" : "Configure"}
@@ -4267,11 +4694,13 @@ function ToggleSetting({
   title,
   detail,
   enabled = true,
+  disabled = false,
   onToggle,
 }: {
   title: string;
   detail: string;
   enabled?: boolean;
+  disabled?: boolean;
   onToggle?: () => void;
 }) {
   const [internal, setInternal] = useState(enabled);
@@ -4284,6 +4713,7 @@ function ToggleSetting({
       </div>
       <button
         className={`toggle ${value ? "on" : ""}`}
+        disabled={disabled}
         onClick={() =>
           onToggle ? onToggle() : setInternal((current) => !current)
         }
@@ -4301,6 +4731,7 @@ function AlertComposer({
   groups,
   templates,
   preset,
+  canSendImmediately,
   onClose,
   onCreate,
 }: {
@@ -4310,6 +4741,7 @@ function AlertComposer({
   groups: AudienceGroup[];
   templates: MessageTemplate[];
   preset: MessageTemplate | null;
+  canSendImmediately: boolean;
   onClose: () => void;
   onCreate: (
     draft: Omit<
@@ -4343,7 +4775,9 @@ function AlertComposer({
   const [building, setBuilding] = useState("Entire facility");
   const [groupId, setGroupId] = useState(groups[0]?.id ?? "");
   const [personId, setPersonId] = useState(recipients[0]?.id ?? "");
-  const [approval, setApproval] = useState("Send immediately");
+  const [approval, setApproval] = useState<
+    "Send immediately" | "Request approval" | "Save draft"
+  >(canSendImmediately ? "Send immediately" : "Request approval");
   const selectedFacility = tenantFacilities.find(
     (item) => item.name === facility,
   );
@@ -4620,37 +5054,44 @@ function AlertComposer({
               </div>
               <aside>
                 <label>Release policy</label>
+                {canSendImmediately && (
+                  <button
+                    className={`approval-option ${approval === "Send immediately" ? "selected" : ""}`}
+                    onClick={() => setApproval("Send immediately")}
+                  >
+                    <i>
+                      {approval === "Send immediately" && <Check size={14} />}
+                    </i>
+                    <span>
+                      <b>Send immediately</b>
+                      <small>Release now using your send permission</small>
+                    </span>
+                  </button>
+                )}
                 <button
-                  className={`approval-option ${approval === "Send immediately" ? "selected" : ""}`}
-                  onClick={() => setApproval("Send immediately")}
-                >
-                  <i>
-                    {approval === "Send immediately" && <Check size={14} />}
-                  </i>
-                  <span>
-                    <b>Send immediately</b>
-                    <small>You have emergency controller access</small>
-                  </span>
-                </button>
-                <button
-                  className={`approval-option ${approval !== "Send immediately" ? "selected" : ""}`}
+                  className={`approval-option ${approval === "Request approval" ? "selected" : ""}`}
                   onClick={() => setApproval("Request approval")}
                 >
                   <i>
-                    {approval !== "Send immediately" && <Check size={14} />}
+                    {approval === "Request approval" && <Check size={14} />}
                   </i>
                   <span>
                     <b>Request approval</b>
                     <small>Notify another controller to review</small>
                   </span>
                 </button>
-                <div className="cost-note">
-                  <b>Estimated SMS usage</b>
+                <button
+                  className={`approval-option ${approval === "Save draft" ? "selected" : ""}`}
+                  onClick={() => setApproval("Save draft")}
+                >
+                  <i>
+                    {approval === "Save draft" && <Check size={14} />}
+                  </i>
                   <span>
-                    {template.channels.includes("sms") ? count : 0} message
-                    credits
+                    <b>Save draft</b>
+                    <small>Keep the recipient snapshot without releasing it</small>
                   </span>
-                </div>
+                </button>
               </aside>
             </div>
           )}
@@ -4709,7 +5150,11 @@ function AlertComposer({
                   recipients: count,
                   requiresAcknowledgement: template.requiresAcknowledgement,
                   status:
-                    approval === "Send immediately" ? "active" : "pending",
+                    approval === "Send immediately"
+                      ? "active"
+                      : approval === "Request approval"
+                        ? "pending_approval"
+                        : "draft",
                 });
               }}
             >
@@ -4718,10 +5163,15 @@ function AlertComposer({
                   <Send size={17} />
                   Send alert now
                 </>
-              ) : (
+              ) : approval === "Request approval" ? (
                 <>
                   <Clock3 size={17} />
                   Submit for approval
+                </>
+              ) : (
+                <>
+                  <FileText size={17} />
+                  Save draft
                 </>
               )}
             </button>
@@ -5397,7 +5847,6 @@ function FacilityEditorModal({
         id: crypto.randomUUID(),
         name: "New building",
         people: 0,
-        status: "clear",
         x: 8 + (index % 3) * 30,
         y: 12 + Math.floor(index / 3) * 32,
         w: 24,
@@ -5462,7 +5911,7 @@ function FacilityEditorModal({
           <div className="section-heading">
             <div>
               <b>Buildings and areas</b>
-              <small>Facility occupancy is calculated from these areas.</small>
+              <small>Employee totals come from directory assignments.</small>
             </div>
             <button
               type="button"
@@ -5484,33 +5933,9 @@ function FacilityEditorModal({
                     updateBuilding(building.id, { name: event.target.value })
                   }
                 />
-                <input
-                  className="form-input"
-                  aria-label="People count"
-                  type="number"
-                  min="0"
-                  value={building.people}
-                  onChange={(event) =>
-                    updateBuilding(building.id, {
-                      people: Number(event.target.value),
-                    })
-                  }
-                />
-                <select
-                  className="form-input"
-                  aria-label="Building status"
-                  value={building.status}
-                  onChange={(event) =>
-                    updateBuilding(building.id, {
-                      status: event.target
-                        .value as Facility["buildings"][number]["status"],
-                    })
-                  }
-                >
-                  <option value="clear">Clear</option>
-                  <option value="warning">Advisory</option>
-                  <option value="alert">Active alert</option>
-                </select>
+                <span className="building-assignment-count">
+                  {building.people} assigned employees
+                </span>
                 <button
                   type="button"
                   title="Delete building"
@@ -5577,7 +6002,10 @@ function TemplateEditorModal({
   );
   const [message, setMessage] = useState(template?.message ?? "");
   const [channels, setChannels] = useState<Channel[]>(
-    template?.channels ?? ["sms", "email", "android"],
+    template?.channels.filter((channel) => channel !== "sms") ?? [
+      "email",
+      "android",
+    ],
   );
   const [ack, setAck] = useState(template?.requiresAcknowledgement ?? true);
   const toggle = (channel: Channel) =>
@@ -5687,7 +6115,7 @@ function TemplateEditorModal({
           />
           <label>Delivery channels</label>
           <div className="channel-options">
-            {(["sms", "email", "android"] as Channel[]).map((channel) => {
+            {(["email", "android"] as Channel[]).map((channel) => {
               const Icon = channelIcon[channel];
               return (
                 <button

@@ -123,7 +123,6 @@ export function facilityFromApi(row: ApiFacility): Facility {
       id: building.id,
       name: building.name,
       people: Number(building.employeeCount || 0),
-      status: "clear",
       x: numberValue(building.mapX, 8 + (index % 3) * 30),
       y: numberValue(building.mapY, 12 + Math.floor(index / 3) * 32),
       w: numberValue(building.mapWidth, 24),
@@ -151,21 +150,13 @@ export function templateFromApi(row: ApiTemplate): MessageTemplate {
     categoryId: row.category_id || undefined,
     severity: severity(row.alert_level),
     message: row.message_template,
-    channels: channels(row.channels),
+    channels: channels(row.channels).filter((channel) => channel !== "sms"),
     requiresAcknowledgement: row.require_acknowledgement,
     isActive: row.is_active,
   };
 }
 
 export function alertFromApi(row: ApiAlert, tenantId: string): Broadcast {
-  const status =
-    row.status === "active"
-      ? "active"
-      : row.status === "resolved" ||
-          row.status === "cancelled" ||
-          row.status === "failed"
-        ? "resolved"
-        : "pending";
   return {
     id: row.public_id,
     backendId: row.id,
@@ -173,7 +164,7 @@ export function alertFromApi(row: ApiAlert, tenantId: string): Broadcast {
     title: row.title,
     message: row.message,
     severity: severity(row.alert_level),
-    status,
+    status: row.status as Broadcast["status"],
     facility: row.audience_names,
     audience: row.audience_names,
     channels: channels(row.channels),

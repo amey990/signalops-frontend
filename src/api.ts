@@ -268,6 +268,69 @@ export type ApiAlert = {
   channels: ("sms" | "email" | "push")[] | string;
   audience_names: string;
 };
+export type ApiAlertDelivery = {
+  channel: "sms" | "email" | "push";
+  status:
+    | "queued"
+    | "processing"
+    | "sent"
+    | "delivered"
+    | "failed"
+    | "skipped";
+  provider: string | null;
+  sentAt: string | null;
+  deliveredAt: string | null;
+  failureCode: string | null;
+};
+export type ApiAlertRecipientDetail = {
+  id: string;
+  user_id: string;
+  full_name: string;
+  email: string | null;
+  phone_e164: string | null;
+  facility_name: string | null;
+  building_name: string | null;
+  acknowledgement_status: string | null;
+  note: string | null;
+  acknowledged_at: string | null;
+  deliveries: ApiAlertDelivery[];
+};
+export type ApiAlertApproval = {
+  id: string;
+  reviewer_id: string;
+  reviewer_name: string;
+  decision: "approved" | "returned";
+  note: string | null;
+  created_at: string;
+};
+export type ApiAlertDetail = ApiAlert & {
+  created_by: string;
+  approved_by_name: string | null;
+  resolved_by_name: string | null;
+  approved_at: string | null;
+  submitted_at: string | null;
+  cancelled_at: string | null;
+  channels: ("sms" | "email" | "push")[];
+  audiences: {
+    id: string;
+    audience_type: string;
+    reference_id: string | null;
+    display_name: string;
+  }[];
+  recipients: ApiAlertRecipientDetail[];
+  approvals: ApiAlertApproval[];
+};
+export type ApiAuditEvent = {
+  id: string;
+  actor_user_id: string | null;
+  actor_name: string | null;
+  action: string;
+  entity_type: string;
+  entity_id: string | null;
+  before_data: Record<string, unknown> | null;
+  after_data: Record<string, unknown> | null;
+  created_at: string;
+};
 export type ApiAlertResponse = {
   alert_recipient_id: string;
   user_id: string;
@@ -465,6 +528,7 @@ export const api = {
   deleteTemplate: (id: string) =>
     request<void>(`/admin/templates/${id}`, { method: "DELETE" }),
   alerts: () => request<ApiAlert[]>("/admin/alerts?limit=100"),
+  alert: (id: string) => request<ApiAlertDetail>(`/admin/alerts/${id}`),
   createAlert: (value: unknown) =>
     request<ApiAlert & { recipientCount: number; deliveryCount: number }>(
       "/admin/alerts",
@@ -472,8 +536,19 @@ export const api = {
     ),
   approveAlert: (id: string) =>
     request(`/admin/alerts/${id}/approve`, { method: "POST", body: "{}" }),
+  submitAlert: (id: string) =>
+    request(`/admin/alerts/${id}/submit`, { method: "POST", body: "{}" }),
+  returnAlert: (id: string, note?: string) =>
+    request(`/admin/alerts/${id}/return`, {
+      method: "POST",
+      body: body({ note }),
+    }),
+  releaseAlert: (id: string) =>
+    request(`/admin/alerts/${id}/release`, { method: "POST", body: "{}" }),
   resolveAlert: (id: string) =>
     request(`/admin/alerts/${id}/resolve`, { method: "POST", body: "{}" }),
+  cancelAlert: (id: string) =>
+    request(`/admin/alerts/${id}/cancel`, { method: "POST", body: "{}" }),
   alertResponses: (id: string) =>
     request<ApiAlertResponse[]>(`/admin/alerts/${id}/responses`),
   remindAlertRecipients: (id: string, userIds?: string[]) =>
@@ -508,4 +583,5 @@ export const api = {
       method: "PUT",
       body: body(value),
     }),
+  audit: () => request<ApiAuditEvent[]>("/admin/audit"),
 };

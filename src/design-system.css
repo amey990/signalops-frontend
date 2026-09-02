@@ -34,6 +34,134 @@
   transition: grid-template-columns .25s ease;
 }
 
+/* Batch 1: complete alert lifecycle and truthful operational detail */
+.app-shell .status-pill.pending_approval,
+.app-shell .status-pill.draft,
+.app-shell .status-pill.scheduled {
+  color: #9a6100;
+  background: #fff3d9;
+}
+
+.app-shell .status-pill.cancelled,
+.app-shell .status-pill.failed {
+  color: #b52e3d;
+  background: #ffebee;
+}
+
+.app-shell .alert-detail-status {
+  margin: 14px 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.app-shell .alert-detail-status small {
+  color: var(--fx-muted);
+  font-size: 8px;
+}
+
+.app-shell .alert-detail-section {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--fx-line);
+}
+
+.app-shell .alert-detail-section > h3 {
+  margin: 0 0 9px;
+  font-size: 10px;
+}
+
+.app-shell .approval-history,
+.app-shell .recipient-delivery-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.app-shell .approval-history > div,
+.app-shell .recipient-delivery-row {
+  padding: 9px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  background: #f8faf9;
+  border: 1px solid var(--fx-line);
+  border-radius: 8px;
+}
+
+.app-shell .approval-history span,
+.app-shell .recipient-delivery-row > span:first-child {
+  min-width: 0;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+}
+
+.app-shell .approval-history b,
+.app-shell .recipient-delivery-row b {
+  font-size: 8px;
+}
+
+.app-shell .approval-history small,
+.app-shell .recipient-delivery-row small {
+  color: var(--fx-muted);
+  font-size: 7px;
+  line-height: 1.45;
+}
+
+.app-shell .recipient-delivery-list {
+  max-height: 310px;
+  overflow-y: auto;
+}
+
+.app-shell .recipient-delivery-row {
+  flex-direction: column;
+}
+
+.app-shell .delivery-channel-results {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.app-shell .delivery-channel-results i {
+  padding: 3px 6px;
+  color: #64727b;
+  background: #eef2f3;
+  border-radius: 5px;
+  font-size: 6.5px;
+  font-style: normal;
+  text-transform: capitalize;
+}
+
+.app-shell .delivery-channel-results i.delivered,
+.app-shell .delivery-channel-results i.sent {
+  color: #127459;
+  background: #e7f7f1;
+}
+
+.app-shell .delivery-channel-results i.failed,
+.app-shell .delivery-channel-results i.cancelled {
+  color: #b52e3d;
+  background: #ffebee;
+}
+
+.app-shell .alert-cancel-button {
+  width: 100%;
+  margin-top: 8px;
+}
+
+.app-shell .building-editor-list > div {
+  grid-template-columns: minmax(180px, 1fr) minmax(130px, auto) 34px;
+  align-items: center;
+}
+
+.app-shell .building-assignment-count {
+  color: var(--fx-muted);
+  font-size: 8px;
+}
+
 .app-shell.sidebar-collapsed { --shell-sidebar: 60px; }
 .app-shell * { font-family: inherit !important; }
 .app-shell button,

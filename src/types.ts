@@ -1,6 +1,13 @@
 export type Severity = "critical" | "warning" | "info";
 export type Channel = "sms" | "email" | "android";
-export type AlertStatus = "active" | "pending" | "resolved";
+export type AlertStatus =
+  | "draft"
+  | "pending_approval"
+  | "scheduled"
+  | "active"
+  | "resolved"
+  | "cancelled"
+  | "failed";
 
 export type Tenant = {
   id: string;
@@ -23,7 +30,6 @@ export type Facility = {
     id: string;
     name: string;
     people: number;
-    status: "clear" | "alert" | "warning";
     x: number;
     y: number;
     w: number;
