@@ -584,6 +584,11 @@ export const api = {
       "/admin/alerts",
       { method: "POST", body: body(value) },
     ),
+  updateAlert: (id: string, value: { message: string }) =>
+    request<{ id: string; status: string; message: string }>(`/admin/alerts/${id}`, {
+      method: "PATCH",
+      body: body(value),
+    }),
   approveAlert: (id: string) =>
     request(`/admin/alerts/${id}/approve`, { method: "POST", body: "{}" }),
   submitAlert: (id: string) =>

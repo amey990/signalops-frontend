@@ -334,6 +334,51 @@
   grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 
+.app-shell .edit-alert-body > label {
+  display: block;
+  margin: 0 0 7px;
+  color: var(--fx-ink-soft);
+  font-size: 8px;
+  font-weight: 650;
+}
+
+.app-shell .edit-alert-body > label:not(:first-child) { margin-top: 16px; }
+
+.app-shell .readonly-alert-title {
+  min-height: 44px;
+  padding: 9px 11px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: var(--fx-soft);
+  border: 1px solid var(--fx-line);
+  border-radius: 8px;
+}
+
+.app-shell .readonly-alert-title b { font-size: 9px; }
+
+.app-shell .return-reason-note {
+  margin-top: 12px;
+  padding: 10px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: #8b5c08;
+  background: #fff7e7;
+  border: 1px solid #f2d89f;
+  border-radius: 8px;
+}
+
+.app-shell .return-reason-note span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.app-shell .return-reason-note b { font-size: 8px; }
+.app-shell .return-reason-note small { font-size: 7px; line-height: 1.5; }
+
 .app-shell .delivery-channel-results {
   display: flex;
   flex-wrap: wrap;

@@ -1362,6 +1362,13 @@ function App() {
               onSubmit={(id) =>
                 runAlertAction(id, api.submitAlert, "Alert submitted for approval")
               }
+              onEdit={(id, message) =>
+                runAlertAction(
+                  id,
+                  (backendId) => api.updateAlert(backendId, { message }),
+                  "Draft message updated",
+                )
+              }
               onApprove={(id) =>
                 runAlertAction(
                   id,
@@ -2038,6 +2045,7 @@ function BroadcastsPage({
   permissions,
   isPlatformAdmin,
   onSubmit,
+  onEdit,
   onApprove,
   onReturn,
   onRelease,
@@ -2053,6 +2061,7 @@ function BroadcastsPage({
   permissions: string[];
   isPlatformAdmin: boolean;
   onSubmit: (id: string) => Promise<void>;
+  onEdit: (id: string, message: string) => Promise<void>;
   onApprove: (id: string) => Promise<void>;
   onReturn: (id: string, note: string) => Promise<void>;
   onRelease: (id: string) => Promise<void>;
@@ -2077,6 +2086,7 @@ function BroadcastsPage({
   const [detail, setDetail] = useState<ApiAlertDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [actionBusy, setActionBusy] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
   const can = (...required: string[]) =>
     isPlatformAdmin ||
     permissions.includes("*") ||
@@ -2722,15 +2732,26 @@ function BroadcastsPage({
                     </span>
                   </div>
                   {can("alerts.create") && (
-                    <button
-                      className="secondary-button"
-                      disabled={actionBusy}
-                      onClick={() =>
-                        perform(() => onSubmit(selected.id))
-                      }
-                    >
-                      Submit for approval
-                    </button>
+                    <>
+                      {(detail?.created_by === currentUserId ||
+                        isPlatformAdmin ||
+                        permissions.includes("*")) && (
+                        <button
+                          className="secondary-button"
+                          disabled={actionBusy}
+                          onClick={() => setEditOpen(true)}
+                        >
+                          Edit message
+                        </button>
+                      )}
+                      <button
+                        className="secondary-button"
+                        disabled={actionBusy}
+                        onClick={() => perform(() => onSubmit(selected.id))}
+                      >
+                        Submit for approval
+                      </button>
+                    </>
                   )}
                   {can("alerts.send") && (
                     <button
@@ -2850,6 +2871,21 @@ function BroadcastsPage({
           </aside>
         )}
       </div>
+      {editOpen && selected && detail && (
+        <EditAlertModal
+          alert={selected}
+          returnReason={
+            [...detail.approvals]
+              .reverse()
+              .find((approval) => approval.decision === "returned")?.note || null
+          }
+          onClose={() => setEditOpen(false)}
+          onSave={async (message) => {
+            await onEdit(selected.id, message);
+            await loadDetail();
+          }}
+        />
+      )}
     </>
   );
 }
@@ -4468,6 +4504,91 @@ function PasswordRecoveryPage() {
         </aside>
       </section>
     </main>
+  );
+}
+
+function EditAlertModal({
+  alert,
+  returnReason,
+  onClose,
+  onSave,
+}: {
+  alert: Broadcast;
+  returnReason: string | null;
+  onClose: () => void;
+  onSave: (message: string) => Promise<void>;
+}) {
+  const [message, setMessage] = useState(alert.message);
+  const [saving, setSaving] = useState(false);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (message.trim().length < 2 || saving) return;
+    setSaving(true);
+    try {
+      await onSave(message.trim());
+      onClose();
+    } catch {
+      // The application-level action displays the API error.
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <div className="modal-backdrop">
+      <form className="small-modal" onSubmit={submit}>
+        <div className="modal-header">
+          <div>
+            <span className="eyebrow">RETURNED DRAFT</span>
+            <h2>Edit alert message</h2>
+          </div>
+          <button type="button" onClick={onClose} disabled={saving}>
+            <X size={21} />
+          </button>
+        </div>
+        <div className="small-modal-body edit-alert-body">
+          <label>Alert</label>
+          <div className="readonly-alert-title">
+            <b>{alert.title}</b>
+            <span className={`severity-label ${alert.severity}`}>
+              {alert.severity}
+            </span>
+          </div>
+          {returnReason && (
+            <div className="return-reason-note">
+              <ShieldCheck size={18} />
+              <span>
+                <b>Requested change</b>
+                <small>{returnReason}</small>
+              </span>
+            </div>
+          )}
+          <label htmlFor="edit-alert-message">Message</label>
+          <textarea
+            id="edit-alert-message"
+            className="form-input"
+            rows={8}
+            minLength={2}
+            maxLength={2000}
+            required
+            autoFocus
+            value={message}
+            onChange={(event) => setMessage(event.target.value)}
+          />
+          <div className="field-hint">
+            <span>The audience and delivery policy remain unchanged.</span>
+            <b>{message.length}/2000</b>
+          </div>
+        </div>
+        <div className="modal-footer">
+          <button type="button" className="text-button" onClick={onClose} disabled={saving}>
+            Cancel
+          </button>
+          <button className="primary-button" disabled={saving || message.trim().length < 2}>
+            {saving ? "Saving…" : "Save changes"}
+          </button>
+        </div>
+      </form>
+    </div>
   );
 }
 
