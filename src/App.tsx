@@ -103,7 +103,7 @@ const pageTitles: Record<
 > = {
   overview: {
     eyebrow: "COMMAND CENTRE",
-    title: "Good morning, Ananya",
+    title: "Overview",
     subtitle:
       "Monitor active incidents, delivery health and acknowledgements across your organisation.",
   },
@@ -218,9 +218,9 @@ function App() {
   const [loadingData, setLoadingData] = useState(false);
   const [currentUser, setCurrentUser] = useState<CurrentUser>({
     id: "",
-    name: "Organisation administrator",
+    name: "",
     email: "",
-    role: "admin",
+    role: "",
     status: "active",
     isPlatformAdmin: false,
     permissions: [],
@@ -238,9 +238,9 @@ function App() {
   const [tenant, setTenant] = useState<Tenant>({
     id: "",
     slug: "",
-    name: "SignalOps",
-    shortName: "SO",
-    plan: "Customer organisation",
+    name: "",
+    shortName: "",
+    plan: "",
     facilities: 0,
     people: 0,
   });
@@ -484,7 +484,7 @@ function App() {
   );
   const deliveryRate = deliveryTotal
     ? Math.round((deliveredTotal / deliveryTotal) * 1000) / 10
-    : 100;
+    : null;
   const criticalAttention = activeBroadcasts.filter(
     (item) => item.severity === "critical",
   );
@@ -1649,7 +1649,7 @@ function Overview({
   active: Broadcast[];
   recipients: number;
   facilitiesCount: number;
-  deliveryRate: number;
+  deliveryRate: number | null;
   templates: MessageTemplate[];
   facilities: Facility[];
   channelSettings: ApiChannelSetting[];
@@ -1658,8 +1658,6 @@ function Overview({
   onOpenAlert: (id: string) => void;
 }) {
   const critical = active.find((item) => item.severity === "critical");
-  const findTemplate = (title: string) =>
-    templates.find((item) => item.title === title) ?? templates[0];
   return (
     <>
       {critical && (
@@ -1726,8 +1724,10 @@ function Overview({
         <StatCard
           icon={Gauge}
           label="Delivery rate"
-          value={`${deliveryRate}%`}
-          helper="Last 30 days"
+          value={deliveryRate === null ? "—" : `${deliveryRate}%`}
+          helper={
+            deliveryRate === null ? "No delivery activity yet" : "Last 30 days"
+          }
           tone="green"
         />
       </section>
@@ -1761,47 +1761,28 @@ function Overview({
         </div>
         <div className="panel quick-panel">
           <PanelHeader
-            title="Quick alert"
-            subtitle="Start from a prepared emergency scenario"
+            title="Prepared templates"
+            subtitle="Start an alert from a template created by your organisation"
           />
-          <button
-            className="emergency-action"
-            onClick={() => onCreate(findTemplate("Fire evacuation"))}
-          >
-            <span>
-              <AlertTriangle size={22} />
-            </span>
-            <div>
-              <b>Send emergency alert</b>
-              <small>Choose a prepared alert type</small>
-            </div>
-            <ChevronRight size={19} />
-          </button>
           <div className="quick-list">
-            <button onClick={() => onCreate(findTemplate("Fire evacuation"))}>
-              <span className="quick-icon fire">01</span>
-              <div>
-                <b>Fire evacuation</b>
-                <small>Evacuate to muster points</small>
-              </div>
-              <ChevronRight size={17} />
-            </button>
-            <button onClick={() => onCreate(findTemplate("Severe weather"))}>
-              <span className="quick-icon weather">02</span>
-              <div>
-                <b>Severe weather</b>
-                <small>Shelter or travel advisory</small>
-              </div>
-              <ChevronRight size={17} />
-            </button>
-            <button onClick={() => onCreate(findTemplate("Medical emergency"))}>
-              <span className="quick-icon medical">03</span>
-              <div>
-                <b>Medical emergency</b>
-                <small>Notify first responders</small>
-              </div>
-              <ChevronRight size={17} />
-            </button>
+            {templates.slice(0, 3).map((template, index) => (
+              <button key={template.id} onClick={() => onCreate(template)}>
+                <span className={`quick-icon ${template.severity}`}>
+                  {String(index + 1).padStart(2, "0")}
+                </span>
+                <div>
+                  <b>{template.title}</b>
+                  <small>{template.category}</small>
+                </div>
+                <ChevronRight size={17} />
+              </button>
+            ))}
+            {!templates.length && (
+              <EmptyState
+                title="No templates yet"
+                text="Create a message template before starting an alert."
+              />
+            )}
           </div>
         </div>
       </section>
@@ -4533,59 +4514,70 @@ function SettingsPage({
           title="Emergency defaults"
           subtitle="Applied to new critical alerts"
         />
-        <ToggleSetting
-          title="Require acknowledgement"
-          detail="Recipients must confirm they are safe"
-          enabled={preferences?.require_critical_acknowledgement ?? true}
-          disabled={!canManage}
-          onToggle={() =>
-            canManage &&
-            updatePreference({
-              requireCriticalAcknowledgement:
-                !preferences?.require_critical_acknowledgement,
-            })
-          }
-        />
-        <ToggleSetting
-          title="Require critical-alert approval"
-          detail="A different authorised user reviews critical alerts"
-          enabled={preferences?.critical_alert_approval ?? true}
-          disabled={!canManage}
-          onToggle={() =>
-            canManage &&
-            updatePreference({
-              criticalAlertApproval: !preferences?.critical_alert_approval,
-            })
-          }
-        />
-        <div className="toggle-setting">
-          <div>
-            <b>Non-response escalation</b>
-            <small>
-              Escalate after{" "}
-              {preferences?.non_response_escalation_minutes ?? 10} minutes
-            </small>
-          </div>
-          <button
-            className="filter-button"
-            disabled={!canManage}
-            onClick={() =>
-              updatePreference({
-                nonResponseEscalationMinutes:
-                  preferences?.non_response_escalation_minutes === 10 ? 15 : 10,
-              })
-            }
-          >
-            Change
-          </button>
-        </div>
-        <div className="settings-callout">
-          <ShieldCheck size={20} />
-          <div>
-            <b>Critical messages always bypass quiet hours</b>
-            <p>Emergency communication remains available at all times.</p>
-          </div>
-        </div>
+        {preferences ? (
+          <>
+            <ToggleSetting
+              title="Require acknowledgement"
+              detail="Recipients must confirm they are safe"
+              enabled={preferences.require_critical_acknowledgement}
+              disabled={!canManage}
+              onToggle={() =>
+                canManage &&
+                updatePreference({
+                  requireCriticalAcknowledgement:
+                    !preferences.require_critical_acknowledgement,
+                })
+              }
+            />
+            <ToggleSetting
+              title="Require critical-alert approval"
+              detail="A different authorised user reviews critical alerts"
+              enabled={preferences.critical_alert_approval}
+              disabled={!canManage}
+              onToggle={() =>
+                canManage &&
+                updatePreference({
+                  criticalAlertApproval: !preferences.critical_alert_approval,
+                })
+              }
+            />
+            <div className="toggle-setting">
+              <div>
+                <b>Non-response escalation</b>
+                <small>
+                  Escalate after {preferences.non_response_escalation_minutes}{" "}
+                  minutes
+                </small>
+              </div>
+              <button
+                className="filter-button"
+                disabled={!canManage}
+                onClick={() =>
+                  updatePreference({
+                    nonResponseEscalationMinutes:
+                      preferences.non_response_escalation_minutes === 10
+                        ? 15
+                        : 10,
+                  })
+                }
+              >
+                Change
+              </button>
+            </div>
+            <div className="settings-callout">
+              <ShieldCheck size={20} />
+              <div>
+                <b>Critical messages always bypass quiet hours</b>
+                <p>Emergency communication remains available at all times.</p>
+              </div>
+            </div>
+          </>
+        ) : (
+          <EmptyState
+            title="Settings unavailable"
+            text="Organisation preferences will appear after they load."
+          />
+        )}
       </div>
     </div>
   );
@@ -5869,7 +5861,7 @@ function FacilityEditorModal({
       ...current,
       {
         id: crypto.randomUUID(),
-        name: "New building",
+        name: "",
         people: 0,
         x: 8 + (index % 3) * 30,
         y: 12 + Math.floor(index / 3) * 32,
@@ -5952,6 +5944,7 @@ function FacilityEditorModal({
                 <input
                   className="form-input"
                   aria-label="Building name"
+                  required
                   value={building.name}
                   onChange={(event) =>
                     updateBuilding(building.id, { name: event.target.value })
@@ -6018,7 +6011,7 @@ function TemplateEditorModal({
 }) {
   const [title, setTitle] = useState(template?.title ?? "");
   const [category, setCategory] = useState(
-    template?.category ?? categories[0] ?? "Emergency",
+    template?.category ?? categories[0] ?? "",
   );
   const [newCategory, setNewCategory] = useState("");
   const [severity, setSeverity] = useState<MessageTemplate["severity"]>(
@@ -6051,7 +6044,7 @@ function TemplateEditorModal({
         className="small-modal"
         onSubmit={(event) => {
           event.preventDefault();
-          if (!channels.length) return;
+          if (!channels.length || !category.trim()) return;
           onSave({
             id: template?.id ?? crypto.randomUUID(),
             tenantId,
@@ -6088,9 +6081,15 @@ function TemplateEditorModal({
               <label>Category</label>
               <select
                 className="form-input"
+                required
                 value={category}
                 onChange={(event) => setCategory(event.target.value)}
               >
+                {!categories.length && (
+                  <option value="" disabled>
+                    Add a category first
+                  </option>
+                )}
                 {categories.map((item) => (
                   <option key={item}>{item}</option>
                 ))}
@@ -6182,7 +6181,7 @@ function TemplateEditorModal({
           )}
           <button
             className="primary-button"
-            disabled={!channels.length}
+            disabled={!channels.length || !category.trim()}
             type="submit"
           >
             <Check size={17} />
